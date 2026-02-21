@@ -9,6 +9,7 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="CycleScreener">
 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
 
@@ -67,7 +68,7 @@
     <!-- PAGE 2: SETTINGS PAGE -->
     <div id="settingsPage" class="page">
         <nav class="navbar page-nav">
-            <div class="navbar-brand"><a class="navbar-item" id="backBtn">< Back</a></div>
+            <div class="navbar-brand"><a class="navbar-item back-button">< Back</a></div>
             <div class="navbar-menu is-active"><div class="navbar-start"><div class="navbar-item has-text-weight-bold">Settings</div></div></div>
         </nav>
         <main class="page-content"><div class="content-container" id="settingsContainer"></div></main>
@@ -79,130 +80,339 @@
             const LAST_TICKER_KEY = 'stockcycle_lastTicker';
             const SETTINGS_KEY = 'stockcycle_settings';
             const PHASES = { DOWNTREND: 'DOWNTREND', NEW_UPTREND: 'NEW_UPTREND', LATE_UPTREND: 'LATE_UPTREND', PRE_DOWNTREND: 'PRE_DOWNTREND' };
-            let allDates = [], allPrices = [], economicDataRaw = null;
+            let allDates = [], allPrices = [];
             
             // --- SECTION 2: DOM ELEMENT REFERENCES ---
-            let tickerInput, fetchButton, statusMessage, currentPhaseStatus, timePeriodSelector, fastEmaInput, slowEmaInput, sma1Input, sma2Input, preDowntrendHistogramsInput, preDowntrendHistogramsValue;
+            let mainPage, settingsPage, goToSettingsButton,
+                tickerInput, fetchButton, timePeriodSelector,
+                priceCanvas, priceCtx, macdCanvas, macdCtx, 
+                economicChart, economicCtx, economicMACDChart, economicMACDCtx,
+                statusMessage, deleteDataButton, 
+                fastEmaInput, slowEmaInput, sma1Input, sma2Input,
+                newUptrendColorInput, lateUptrendColorInput, preDowntrendColorInput, downtrendColorInput,
+                preDowntrendHistogramsInput, preDowntrendHistogramsValue, currentPhaseStatus;
 
-            // --- SECTION 3: INITIALIZATION ---
+            // --- SECTION 3: PRIMARY EVENT LISTENER ---
             document.addEventListener('DOMContentLoaded', () => {
+                mainPage = document.getElementById('mainPage');
+                settingsPage = document.getElementById('settingsPage');
+                goToSettingsButton = document.getElementById('goToSettingsButton');
                 tickerInput = document.getElementById('tickerInput');
                 fetchButton = document.getElementById('fetchButton');
+                priceCanvas = document.getElementById('priceChart');
+                priceCtx = priceCanvas.getContext('2d');
+                macdCanvas = document.getElementById('macdChart');
+                macdCtx = macdCanvas.getContext('2d');
+                economicChart = document.getElementById('economicChart');
+                economicCtx = economicChart.getContext('2d');
+                economicMACDChart = document.getElementById('economicMACDChart');
+                economicMACDCtx = economicMACDChart.getContext('2d');
                 statusMessage = document.getElementById('statusMessage');
                 currentPhaseStatus = document.getElementById('currentPhaseStatus');
 
-                document.getElementById('goToSettingsButton').onclick = () => { document.getElementById('mainPage').style.display='none'; document.getElementById('settingsPage').style.display='flex'; };
-                document.getElementById('backBtn').onclick = () => { document.getElementById('settingsPage').style.display='none'; document.getElementById('mainPage').style.display='flex'; };
+                const showPage = (pageId) => {
+                    document.querySelectorAll('.page').forEach(p => { p.style.display = 'none'; });
+                    document.getElementById(pageId).style.display = 'flex';
+                };
+
+                goToSettingsButton.addEventListener('click', () => showPage('settingsPage'));
+                document.querySelectorAll('.back-button').forEach(btn => {
+                    btn.addEventListener('click', () => showPage('mainPage'));
+                });
                 
                 const burger = document.querySelector('.navbar-burger');
-                burger.onclick = () => { burger.classList.toggle('is-active'); document.getElementById('navbarBasicMenu').classList.toggle('is-active'); };
+                const menu = document.getElementById(burger.dataset.target);
+                burger.addEventListener('click', () => { burger.classList.toggle('is-active'); menu.classList.toggle('is-active'); });
+                
+                fetchButton.addEventListener('click', fetchData);
+                tickerInput.addEventListener('keypress', e => { if (e.key === 'Enter') fetchData(); });
                 
                 buildSettingsPage();
                 loadSettings();
                 
                 const lastTicker = localStorage.getItem(LAST_TICKER_KEY);
-                if (lastTicker) tickerInput.value = lastTicker;
-
-                fetchButton.onclick = fetchData;
-                tickerInput.onkeypress = (e) => { if (e.key === 'Enter') fetchData(); };
-                
+                if (lastTicker) { tickerInput.value = lastTicker; }
                 fetchData();
             });
             
-            // --- SECTION 4: DATA FETCHING ---
-            async function fetchData() {
-                const ticker = tickerInput.value.trim().toUpperCase();
-                statusMessage.textContent = `Fetching data for ${ticker}...`;
-                try {
-                    const [pRes, eRes] = await Promise.all([fetch(`/api/price/${ticker}`), fetch(`/api/economic`)]);
-                    if (!pRes.ok) throw new Error("Stock data fetch failed.");
-                    
-                    const pJson = await pRes.json();
-                    const res = pJson.chart.result[0];
-                    const ts = res.timestamp;
-                    const cl = res.indicators.quote[0].close;
-                    
-                    allDates = []; allPrices = [];
-                    ts.forEach((t, i) => {
-                        if (cl[i] != null) {
-                            allDates.push(new Date(t * 1000).toISOString().split('T')[0]);
-                            allPrices.push(cl[i]);
-                        }
-                    });
+            // --- SECTION 4: UI & SETTINGS MANAGEMENT ---
+            function buildSettingsPage() {
+                const container = document.getElementById('settingsContainer');
+                container.innerHTML = `
+                    <h2 class="title is-4 has-text-light">Chart Display</h2>
+                    <div class="field settings-field">
+                        <label class="label" for="timePeriodSelector">Time Period</label>
+                        <div class="control">
+                            <div class="select is-fullwidth">
+                                <select id="timePeriodSelector">
+                                    <option value="all">All Time</option>
+                                    <option value="10yr">10 Years</option>
+                                    <option value="7yr">7 Years</option>
+                                    <option value="5yr">5 Years</option>
+                                    <option value="3yr">3 Years</option>
+                                    <option value="1yr">1 Year</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">Moving Average Periods (Weeks/Months)</h2>
+                    <div class="field settings-field"><label class="label" for="fastEmaInput">Fast EMA Period</label><div class="control"><input class="input" type="number" id="fastEmaInput" step="1"></div></div>
+                    <div class="field settings-field"><label class="label" for="slowEmaInput">Slow EMA Period</label><div class="control"><input class="input" type="number" id="slowEmaInput" step="1"></div></div>
+                    <div class="field settings-field"><label class="label" for="sma1Input">SMA 1 Period</label><div class="control"><input class="input" type="number" id="sma1Input" step="1"></div></div>
+                    <div class="field settings-field"><label class="label" for="sma2Input">SMA 2 Period</label><div class="control"><input class="input" type="number" id="sma2Input" step="1"></div></div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">Cycle Definition</h2>
+                    <div class="field settings-field">
+                        <label class="label" for="preDowntrendHistogramsInput">Pre-Downtrend Trigger</label>
+                        <p class="help has-text-grey" style="margin-top:-1rem; margin-bottom: 1rem;">Activates when Job Openings MACD is red AND the stock's red histogram has worsened for a set number of weeks.</p>
+                        <div class="slider-container">
+                            <input class="slider is-fullwidth is-info" type="range" id="preDowntrendHistogramsInput" min="1" max="10" step="1">
+                            <span id="preDowntrendHistogramsValue" class="tag is-info is-large">3</span>
+                        </div>
+                    </div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">Phase Colors</h2>
+                    <div class="field settings-field"><label class="label" for="newUptrendColorInput">New Uptrend Color</label><div class="control"><input class="input" type="color" id="newUptrendColorInput"></div></div>
+                    <div class="field settings-field"><label class="label" for="lateUptrendColorInput">Late Uptrend Color</label><div class="control"><input class="input" type="color" id="lateUptrendColorInput"></div></div>
+                    <div class="field settings-field"><label class="label" for="preDowntrendColorInput">Pre-Downtrend Color</label><div class="control"><input class="input" type="color" id="preDowntrendColorInput"></div></div>
+                    <div class="field settings-field"><label class="label" for="downtrendColorInput">Downtrend Color</label><div class="control"><input class="input" type="color" id="downtrendColorInput"></div></div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">App Data</h2>
+                    <div class="field"><div class="control"><button class="button is-danger" id="deleteDataButton">Clear All Saved Data</button></div><p class="help has-text-grey">This clears the last ticker and all saved settings.</p></div>`;
+                
+                timePeriodSelector = document.getElementById('timePeriodSelector');
+                fastEmaInput = document.getElementById('fastEmaInput');
+                slowEmaInput = document.getElementById('slowEmaInput');
+                sma1Input = document.getElementById('sma1Input');
+                sma2Input = document.getElementById('sma2Input');
+                newUptrendColorInput = document.getElementById('newUptrendColorInput');
+                lateUptrendColorInput = document.getElementById('lateUptrendColorInput');
+                preDowntrendColorInput = document.getElementById('preDowntrendColorInput');
+                downtrendColorInput = document.getElementById('downtrendColorInput');
+                preDowntrendHistogramsInput = document.getElementById('preDowntrendHistogramsInput');
+                preDowntrendHistogramsValue = document.getElementById('preDowntrendHistogramsValue');
+                deleteDataButton = document.getElementById('deleteDataButton');
 
-                    const eCsv = await eRes.text();
-                    const lines = eCsv.trim().split('\n');
-                    lines.shift();
-                    economicDataRaw = lines.map(l => {
-                        const [date, val] = l.split(',');
-                        return { date, value: parseFloat(val) };
-                    }).filter(d => !isNaN(d.value));
-
-                    localStorage.setItem(LAST_TICKER_KEY, ticker);
-                    statusMessage.textContent = `Displaying ${ticker}.`;
-                    processAndDraw();
-                } catch (e) { statusMessage.textContent = e.message; }
+                const settingInputs = [timePeriodSelector, fastEmaInput, slowEmaInput, sma1Input, sma2Input, newUptrendColorInput, lateUptrendColorInput, preDowntrendColorInput, downtrendColorInput, preDowntrendHistogramsInput];
+                settingInputs.forEach(input => input.addEventListener('change', () => { saveSettings(); processAndDraw(); }));
+                preDowntrendHistogramsInput.addEventListener('input', () => { preDowntrendHistogramsValue.textContent = preDowntrendHistogramsInput.value; });
+                deleteDataButton.addEventListener('click', () => { if (confirm("Are you sure?")) { localStorage.clear(); loadSettings(); alert("Cleared saved data."); processAndDraw(); } });
             }
 
-            // --- SECTION 5: CORE LOGIC (ORIGINAL CYCLE ALGORITHM) ---
-            function processAndDraw() {
-                if (!allPrices || allPrices.length === 0) return;
-                const s = getSettings();
-                const fastP = parseInt(s.fastEma), slowP = parseInt(s.slowEma), sma1P = parseInt(s.sma1), sma2P = parseInt(s.sma2), histP = parseInt(s.preDowntrendHistograms);
+            function saveSettings() { 
+                const settings = { 
+                    timePeriod: timePeriodSelector.value, fastEma: fastEmaInput.value, slowEma: slowEmaInput.value,
+                    sma1: sma1Input.value, sma2: sma2Input.value,
+                    newUptrendColor: newUptrendColorInput.value, lateUptrendColor: lateUptrendColorInput.value,
+                    preDowntrendColor: preDowntrendColorInput.value, downtrendColor: downtrendColorInput.value,
+                    preDowntrendHistograms: preDowntrendHistogramsInput.value
+                }; 
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); 
+            }
+            
+            function loadSettings() {
+                const savedSettings = localStorage.getItem(SETTINGS_KEY);
+                const defaults = { 
+                    timePeriod: '5yr', fastEma: '10', slowEma: '20', sma1: '50', sma2: '100',
+                    newUptrendColor: '#04aa6d', lateUptrendColor: '#ffdd57', preDowntrendColor: '#ff9800', downtrendColor: '#ff3860',
+                    preDowntrendHistograms: '3'
+                };
+                const settings = savedSettings ? JSON.parse(savedSettings) : {};
+                timePeriodSelector.value = settings.timePeriod || defaults.timePeriod;
+                fastEmaInput.value = settings.fastEma || defaults.fastEma;
+                slowEmaInput.value = settings.slowEma || defaults.slowEma;
+                sma1Input.value = settings.sma1 || defaults.sma1;
+                sma2Input.value = settings.sma2 || defaults.sma2;
+                newUptrendColorInput.value = settings.newUptrendColor || defaults.newUptrendColor;
+                lateUptrendColorInput.value = settings.lateUptrendColor || defaults.lateUptrendColor;
+                preDowntrendColorInput.value = settings.preDowntrendColor || defaults.preDowntrendColor;
+                downtrendColorInput.value = settings.downtrendColor || defaults.downtrendColor;
+                preDowntrendHistogramsInput.value = settings.preDowntrendHistograms || defaults.preDowntrendHistograms;
+                preDowntrendHistogramsValue.textContent = preDowntrendHistogramsInput.value;
+            }
+            
+            // --- SECTION 5: CORE LOGIC ---
+            async function fetchData() {
+                const ticker = tickerInput.value.trim().toUpperCase();
+                if (!ticker) { statusMessage.textContent = "Please enter a ticker symbol."; return; }
+                statusMessage.textContent = `Connecting to server...`;
+                currentPhaseStatus.textContent = '';
+                clearCharts();
+                try {
+                    const results = await Promise.allSettled([
+                        fetchPriceData(ticker),
+                        fetchEconomicData()
+                    ]);
 
+                    const priceResult = results[0];
+                    const economicResult = results[1];
+
+                    if (priceResult.status === 'rejected') throw priceResult.reason;
+                    
+                    const priceData = priceResult.value;
+                    let economicData = null;
+                    if (economicResult.status === 'fulfilled') economicData = economicResult.value;
+
+                    allDates = priceData.dates;
+                    allPrices = priceData.prices;
+                    localStorage.setItem(LAST_TICKER_KEY, ticker);
+
+                    statusMessage.textContent = `Displaying ${ticker}.`;
+                    processAndDraw(economicData);
+                } catch (error) { 
+                    statusMessage.textContent = `Error: ${error.message}`; 
+                }
+            }
+            
+            async function fetchPriceData(ticker) {
+                const response = await fetch(`/api/price/${ticker}`);
+                if (!response.ok) throw new Error(`Stock ticker not found.`);
+                const json = await response.json();
+                const res = json.chart.result[0];
+                const timestamps = res.timestamp;
+                const closePrices = res.indicators.quote[0].close;
+                
+                const dates = [], prices = [];
+                timestamps.forEach((ts, i) => {
+                    if (closePrices[i] != null) {
+                        dates.push(new Date(ts * 1000).toISOString().split('T')[0]);
+                        prices.push(closePrices[i]);
+                    }
+                });
+                return { dates, prices };
+            }
+
+            async function fetchEconomicData() {
+                const response = await fetch(`/api/economic`);
+                if (!response.ok) return null;
+                const rawData = await response.text();
+                const lines = rawData.trim().split('\n');
+                lines.shift(); // Remove header
+                return lines.map(line => {
+                    const [date, value] = line.split(',');
+                    const numValue = parseFloat(value);
+                    if (date && !isNaN(numValue)) return { date: date.trim(), value: numValue };
+                    return null;
+                }).filter(Boolean);
+            }
+
+            function processAndDraw(economicData = null) {
+                if (!allPrices || allPrices.length === 0) { clearCharts(); return; }
+                const fastPeriod = parseInt(fastEmaInput.value, 10);
+                const slowPeriod = parseInt(slowEmaInput.value, 10);
+                const sma1Period = parseInt(sma1Input.value, 10);
+                const sma2Period = parseInt(sma2Input.value, 10);
+                const preDowntrendHistograms = parseInt(preDowntrendHistogramsInput.value, 10);
+                
                 const stockMacdData = calculateMACD(allPrices);
-                const stockFull = {
-                    fastEma: calculateEMA(allPrices, fastP), slowEma: calculateEMA(allPrices, slowP),
-                    sma1: calculateSMA(allPrices, sma1P), sma2: calculateSMA(allPrices, sma2P),
+                const stockFull = { 
+                    fastEma: calculateEMA(allPrices, fastPeriod), slowEma: calculateEMA(allPrices, slowPeriod), 
+                    sma1: calculateSMA(allPrices, sma1Period), sma2: calculateSMA(allPrices, sma2Period), 
                     ...stockMacdData
                 };
 
-                let ecoIndicators = null;
-                if (economicDataRaw) {
-                    const alignedValues = allDates.map(d => {
-                        const m = [...economicDataRaw].reverse().find(e => e.date <= d);
-                        return m ? m.value : null;
-                    });
-                    ecoIndicators = {
-                        values: alignedValues,
-                        fastEma: calculateEMA(alignedValues, fastP),
-                        slowEma: calculateEMA(alignedValues, slowP),
-                        ...calculateMACD(alignedValues)
+                let economicIndicators = null;
+                if (economicData) {
+                    const alignedEcoValues = alignEconomicData(allDates, economicData);
+                    economicIndicators = {
+                        values: alignedEcoValues,
+                        fastEma: calculateEMA(alignedEcoValues, fastPeriod),
+                        slowEma: calculateEMA(alignedEcoValues, slowPeriod),
+                        ...calculateMACD(alignedEcoValues)
                     };
                 }
-
-                // EXACT CYCLE ALGORITHM FROM ORIGINAL FILE
-                const phases = determineCyclePhases(stockFull, histP, ecoIndicators);
-                updateCurrentPhaseStatus(phases, allDates, s);
-
-                const startIdx = getFilterStartIndex(s.timePeriod);
-                const slicedDates = allDates.slice(startIdx);
-                const slicedData = {
-                    prices: allPrices.slice(startIdx),
-                    fastEma: stockFull.fastEma.slice(startIdx), slowEma: stockFull.slowEma.slice(startIdx),
-                    sma1: stockFull.sma1.slice(startIdx), sma2: stockFull.sma2.slice(startIdx),
-                    macdLine: stockFull.macdLine.slice(startIdx), signalLine: stockFull.signalLine.slice(startIdx),
-                    histogram: stockFull.histogram.slice(startIdx), phases: phases.slice(startIdx),
-                    economic: ecoIndicators ? {
-                        values: ecoIndicators.values.slice(startIdx),
-                        fastEma: ecoIndicators.fastEma.slice(startIdx), slowEma: ecoIndicators.slowEma.slice(startIdx),
-                        macdLine: ecoIndicators.macdLine.slice(startIdx), signalLine: ecoIndicators.signalLine.slice(startIdx),
-                        histogram: ecoIndicators.histogram.slice(startIdx)
+                
+                const stockFullPhases = determineCyclePhases(stockFull, preDowntrendHistograms, economicIndicators);
+                updateCurrentPhaseStatus(stockFullPhases, allDates);
+                
+                const startIndex = getFilterStartIndex();
+                const dates = allDates.slice(startIndex);
+                
+                const sliced = { 
+                    prices: allPrices.slice(startIndex),
+                    fastEma: stockFull.fastEma.slice(startIndex), slowEma: stockFull.slowEma.slice(startIndex), 
+                    sma1: stockFull.sma1.slice(startIndex), sma2: stockFull.sma2.slice(startIndex), 
+                    macdLine: stockFull.macdLine.slice(startIndex), signalLine: stockFull.signalLine.slice(startIndex), 
+                    histogram: stockFull.histogram.slice(startIndex), phases: stockFullPhases.slice(startIndex),
+                    economic: economicIndicators ? {
+                        values: economicIndicators.values.slice(startIndex),
+                        fastEma: economicIndicators.fastEma.slice(startIndex),
+                        slowEma: economicIndicators.slowEma.slice(startIndex),
+                        macdLine: economicIndicators.macdLine.slice(startIndex),
+                        signalLine: economicIndicators.signalLine.slice(startIndex),
+                        histogram: economicIndicators.histogram.slice(startIndex)
                     } : null
                 };
 
-                drawPriceChart(slicedDates, slicedData, s);
-                drawMacdChart('macdChart', slicedDates, slicedData.macdLine, slicedData.signalLine, slicedData.histogram, "Stock MACD");
-                if (slicedData.economic) {
-                    drawEcoChart(slicedDates, slicedData.economic, fastP, slowP);
-                    drawMacdChart('economicMACDChart', slicedDates, slicedData.economic.macdLine, slicedData.economic.signalLine, slicedData.economic.histogram, "Economic MACD");
-                }
+                if (sliced.prices.length === 0) { clearCharts(); statusMessage.textContent = "No data for selected time period."; return; }
+                
+                drawPriceChart(dates, sliced, fastPeriod, slowPeriod, sma1Period, sma2Period);
+                drawMacdChart(dates, sliced);
+                drawEconomicValueChart(dates, sliced.economic, fastPeriod, slowPeriod);
+                drawEconomicMACDChart(dates, sliced.economic);
             }
 
-            function determineCyclePhases(stock, histogramCount, eco) {
-                const { fastEma, slowEma, macdLine, signalLine, histogram } = stock;
+            // --- SECTION 6: CALCULATION & CHARTING ---
+            function updateCurrentPhaseStatus(phases, dates) {
+                if (!phases || phases.length === 0) {
+                    currentPhaseStatus.textContent = '';
+                    return;
+                }
+                const currentPhase = phases[phases.length - 1];
+                let phaseStartDate = dates[dates.length - 1];
+                for (let i = dates.length - 2; i >= 0; i--) {
+                    if (phases[i] !== currentPhase) {
+                        phaseStartDate = dates[i + 1];
+                        break;
+                    }
+                    if (i === 0) { phaseStartDate = dates[0]; }
+                }
+
+                const formattedPhaseName = currentPhase.replace(/_/g, ' ').replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+                currentPhaseStatus.textContent = `${formattedPhaseName} (since ${phaseStartDate})`;
+                const s = getSettings();
+                currentPhaseStatus.style.color = s[currentPhase.toLowerCase() + 'Color'];
+            }
+
+            function getSettings() {
+                const savedSettings = localStorage.getItem(SETTINGS_KEY);
+                const defaults = { 
+                    timePeriod: '5yr', fastEma: '10', slowEma: '20', sma1: '50', sma2: '100',
+                    new_uptrendColor: '#04aa6d', late_uptrendColor: '#ffdd57', pre_downtrendColor: '#ff9800', downtrendColor: '#ff3860',
+                    preDowntrendHistograms: '3'
+                };
+                const s = savedSettings ? JSON.parse(savedSettings) : {};
+                // Handle different key naming in settings object vs CSS inputs
+                return {
+                    newuptrendColor: s.newUptrendColor || defaults.new_uptrendColor,
+                    lateuptrendColor: s.lateUptrendColor || defaults.late_uptrendColor,
+                    predowntrendColor: s.preDowntrendColor || defaults.pre_downtrendColor,
+                    downtrendColor: s.downtrendColor || defaults.downtrendColor
+                };
+            }
+
+            function alignEconomicData(priceDates, economicData) {
+                if (!economicData || economicData.length === 0) return null;
+                let economicIndex = 0;
+                const aligned = [];
+                for (let i = 0; i < priceDates.length; i++) {
+                    const currentPriceDate = priceDates[i];
+                    while (economicIndex + 1 < economicData.length && economicData[economicIndex + 1].date <= currentPriceDate) {
+                        economicIndex++;
+                    }
+                    if (economicData[economicIndex].date <= currentPriceDate) {
+                        aligned.push(economicData[economicIndex].value);
+                    } else {
+                        aligned.push(null);
+                    }
+                }
+                return aligned;
+            }
+
+            function determineCyclePhases(stockIndicators, histogramCount, economicIndicators) {
+                const { fastEma, slowEma, macdLine, signalLine, histogram } = stockIndicators;
                 const phases = new Array(fastEma.length).fill(PHASES.DOWNTREND);
-                
                 for (let i = 1; i < fastEma.length; i++) {
                     const fe_c = fastEma[i], se_c = slowEma[i];
                     const ml_c = macdLine[i], ml_p = macdLine[i - 1];
@@ -216,7 +426,7 @@
                     if (fe_c < se_c) {
                         phases[i] = PHASES.DOWNTREND; continue;
                     }
-
+                    
                     switch (previousPhase) {
                         case PHASES.DOWNTREND:
                             phases[i] = PHASES.NEW_UPTREND; break;
@@ -225,189 +435,172 @@
                             else { phases[i] = PHASES.NEW_UPTREND; }
                             break;
                         case PHASES.LATE_UPTREND:
-                            let isPreTrigger = true;
-                            if (i <= histogramCount) { isPreTrigger = false; } 
-                            else {
-                                for (let j = 0; j < histogramCount; j++) {
-                                    const hC = histogram[i-j], hP = histogram[i-j-1];
-                                    if (hC === null || hP === null || hC >= 0 || hP >= 0 || hC >= hP) {
-                                        isPreTrigger = false; break;
-                                    }
+                            let isPreDowntrendTrigger = true;
+                            if (i <= histogramCount) { isPreDowntrendTrigger = false; break; }
+                            for (let j = 0; j < histogramCount; j++) {
+                                const histCurrent = histogram[i - j];
+                                const histPrev = histogram[i - j - 1];
+                                if (histCurrent === null || histPrev === null || histCurrent >= 0 || histPrev >= 0 || histCurrent >= histPrev) {
+                                    isPreDowntrendTrigger = false;
+                                    break;
                                 }
-                                if (isPreTrigger && eco) {
-                                    if (!eco.histogram || eco.histogram[i] === null || eco.histogram[i] >= 0) isPreTrigger = false;
-                                } else { isPreTrigger = false; }
                             }
-                            phases[i] = isPreTrigger ? PHASES.PRE_DOWNTREND : PHASES.LATE_UPTREND;
+                            if (isPreDowntrendTrigger && economicIndicators) {
+                                if (!economicIndicators.histogram || economicIndicators.histogram[i] === null || economicIndicators.histogram[i] >= 0) {
+                                    isPreDowntrendTrigger = false;
+                                }
+                            } else {
+                                isPreDowntrendTrigger = false;
+                            }
+                            if (isPreDowntrendTrigger) { phases[i] = PHASES.PRE_DOWNTREND; }
+                            else { phases[i] = PHASES.LATE_UPTREND; }
                             break;
                         case PHASES.PRE_DOWNTREND:
-                            phases[i] = PHASES.PRE_DOWNTREND; break;
+                             phases[i] = PHASES.PRE_DOWNTREND; break;
                     }
                 }
                 return phases;
             }
 
-            // --- SECTION 6: CALCULATIONS & CHARTING ---
-            function calculateSMA(d, p) { 
-                const s = new Array(d.length).fill(null); 
-                for(let i=p-1; i<d.length; i++) { 
-                    let sum = 0; for(let j=0; j<p; j++) sum += d[i-j]; 
-                    s[i] = sum/p; 
-                } return s; 
+            function getFilterStartIndex() { 
+                const p = timePeriodSelector.value, tp = allDates.length, wiy = 52.1775;
+                if (p === 'all') return 0; 
+                if (p === '10yr') return Math.max(0, tp - Math.floor(10 * wiy));
+                if (p === '7yr') return Math.max(0, tp - Math.floor(7 * wiy));
+                if (p === '5yr') return Math.max(0, tp - Math.floor(5 * wiy));
+                if (p === '3yr') return Math.max(0, tp - Math.floor(3 * wiy));
+                if (p === '1yr') return Math.max(0, tp - Math.floor(1 * wiy));
+                return 0; 
             }
-            function calculateEMA(d, p) { 
-                const k = 2/(p+1), e = new Array(d.length).fill(null); 
-                let sum = 0; for(let i=0; i<p; i++) sum += d[i]; 
-                e[p-1] = sum/p; 
-                for(let i=p; i<d.length; i++) e[i] = (d[i]*k) + (e[i-1]*(1-k)); 
-                return e; 
+            function calculateSMA(d, p) { if (!d || d.length < p) return new Array(d.length).fill(null); const s = new Array(d.length).fill(null); let sum = 0; for (let i=0; i<p; i++) sum+=d[i]; s[p-1]=sum/p; for (let i=p; i<d.length; i++) { sum=sum-d[i-p]+d[i]; s[i]=sum/p; } return s; }
+            function calculateEMA(d, p) { if (!d || d.length < p) return new Array(d.length).fill(null); const k=2/(p+1), e=new Array(d.length).fill(null); let sum=0; for (let i=0; i<p; i++) sum+=d[i]; e[p-1]=sum/p; for (let i=p; i<d.length; i++) { if (e[i-1]!==null) e[i]=(d[i]*k)+(e[i-1]*(1-k)); } return e; }
+            function calculateMACD(d, p12=12, p26=26, pS=9) { const e12=calculateEMA(d, p12), e26=calculateEMA(d, p26); const ml=e26.map((v,i)=>v!==null&&e12[i]!==null?e12[i]-v:null); const sl=calculateEMA(ml, pS); const h=sl.map((v,i)=>v!==null&&ml[i]!==null?ml[i]-v:null); return { macdLine:ml, signalLine:sl, histogram:h }; }
+            function clearCharts() { priceCtx.clearRect(0,0,priceCanvas.width,priceCanvas.height); macdCtx.clearRect(0,0,macdCanvas.width,macdCanvas.height); if(economicCtx) economicCtx.clearRect(0,0,economicChart.width,economicChart.height); if(economicMACDCtx) economicMACDCtx.clearRect(0,0,economicMACDChart.width,economicMACDChart.height); }
+            const drawLine = (ctx, d, mX, mY, c, lw=1.5) => { ctx.beginPath();ctx.lineWidth=lw;ctx.strokeStyle=c;let f=true; d.forEach((v,i)=>{if(v!==null){const x=mX(i),y=mY(v);if(f){ctx.moveTo(x,y);f=false;}else{ctx.lineTo(x,y);}}});ctx.stroke(); };
+            
+            function drawPriceChart(d, sd, fp, sp, s1p, s2p) { 
+                const {prices, fastEma,slowEma,sma1,sma2, phases}=sd; 
+                const cont=priceCanvas.parentElement, w=cont.clientWidth, h=cont.clientHeight; if (w<=0||h<=0) return; 
+                priceCanvas.width=w*devicePixelRatio; priceCanvas.height=h*devicePixelRatio; priceCtx.scale(devicePixelRatio,devicePixelRatio); priceCtx.clearRect(0,0,w,h); 
+                let allVis=[...prices,...fastEma.filter(v=>v),...slowEma.filter(v=>v),...sma1.filter(v=>v),...sma2.filter(v=>v)];
+                const minY=Math.min(...allVis),maxY=Math.max(...allVis); 
+                const m={t:20,r:50,b:40,l:50},cW=w-m.l-m.r,cH=h-m.t-m.b; 
+                const mX=(i)=>m.l+(d.length>1?(i/(d.length-1))*cW:cW/2),mY=(v)=>h-m.b-((v-minY)/(maxY-minY))*cH; 
+                const transparent = '26';
+                const phaseColors = {
+                    [PHASES.NEW_UPTREND]: newUptrendColorInput.value + transparent,
+                    [PHASES.LATE_UPTREND]: lateUptrendColorInput.value + transparent,
+                    [PHASES.PRE_DOWNTREND]: preDowntrendColorInput.value + transparent,
+                    [PHASES.DOWNTREND]: downtrendColorInput.value + transparent
+                };
+                const barWidth = d.length > 1 ? cW / (d.length - 1) : cW;
+                for (let i = 0; i < phases.length; i++) { if (phases[i] && phaseColors[phases[i]]) { priceCtx.fillStyle = phaseColors[phases[i]]; const x = mX(i) - barWidth / 2; priceCtx.fillRect(x, m.t, barWidth, cH); } }
+                priceCtx.font="12px sans-serif";priceCtx.textAlign='right';priceCtx.fillStyle='#a0a0a0'; 
+                for(let i=0;i<=5;i++){const val=minY+(i/5)*(maxY-minY),y=mY(val);priceCtx.beginPath();priceCtx.strokeStyle='#444';priceCtx.lineWidth=0.5;priceCtx.moveTo(m.l,y);priceCtx.lineTo(w-m.r,y);priceCtx.stroke();priceCtx.fillText(val.toFixed(2),m.l-8,y+4);} 
+                const xTS=Math.max(1,Math.floor(d.length/Math.floor(cW/100))); 
+                for(let i=0;i<d.length;i+=xTS){priceCtx.textAlign='center';priceCtx.fillText(d[i],mX(i),h-m.b+20);} 
+                drawLine(priceCtx,prices,mX,mY,'#a0a0a0',1.5);drawLine(priceCtx,fastEma,mX,mY,'#3273dc');drawLine(priceCtx,slowEma,mX,mY,'#23d160');drawLine(priceCtx,sma1,mX,mY,'#ff9800');drawLine(priceCtx,sma2,mX,mY,'#c56bf0');
             }
-            function calculateMACD(d) {
-                const e12 = calculateEMA(d, 12), e26 = calculateEMA(d, 26);
-                const ml = e12.map((v,i) => (v && e26[i]) ? v - e26[i] : null);
-                const sl = calculateEMA(ml.filter(v => v !== null), 9);
-                const fsl = new Array(ml.length - sl.length).fill(null).concat(sl);
-                const h = ml.map((v,i) => (v !== null && fsl[i] !== null) ? v - fsl[i] : null);
-                return { macdLine: ml, signalLine: fsl, histogram: h };
+            
+            function drawMacdChart(d, sd) { 
+                const {macdLine,signalLine,histogram}=sd; 
+                const ctx = macdCtx; const canvas = macdCanvas;
+                const cont = canvas.parentElement, w = cont.clientWidth, h = cont.clientHeight; if (w <= 0 || h <= 0) return;
+                canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio); ctx.clearRect(0, 0, w, h);
+                const allVis=[...macdLine.filter(v=>v),...signalLine.filter(v=>v),...histogram.filter(v=>v)]; if(allVis.length===0)return; 
+                const minY=Math.min(...allVis),maxY=Math.max(...allVis); 
+                const m={t:20,r:50,b:40,l:50},cW=w-m.l-m.r,cH=h-m.t-m.b; 
+                const mX=(i)=>m.l+(d.length>1?(i/(d.length-1))*cW:cW/2),mY=(v)=>h-m.b-((v-minY)/(maxY-minY))*cH; 
+                const yZ=mY(0);ctx.beginPath();ctx.strokeStyle='#a0a0a0';ctx.lineWidth=1;ctx.moveTo(m.l,yZ);ctx.lineTo(w-m.r,yZ);ctx.stroke(); 
+                const bW=Math.max(1,cW/d.length*0.8); 
+                for(let i=0;i<histogram.length;i++){if(histogram[i]!==null){const x=mX(i)-bW/2,y=mY(histogram[i]);ctx.fillStyle=histogram[i]>0?'rgba(35,209,96,0.7)':'rgba(255,56,96,0.7)';ctx.fillRect(x,y,bW,yZ-y);}} 
+                drawLine(ctx,macdLine,mX,mY,'#007bff');
+                drawLine(ctx,signalLine,mX,mY,'#fd7e14'); 
+                const legX=m.l+10,legY=m.t+10,lSp=18; ctx.font="14px sans-serif";ctx.textAlign='left'; 
+                ctx.fillStyle='#007bff';ctx.fillText('Stock MACD Line',legX,legY); 
+                ctx.fillStyle='#fd7e14';ctx.fillText('Stock Signal Line',legX,legY+lSp); 
             }
 
-            function drawPriceChart(dates, data, s) {
-                const can = document.getElementById('priceChart'), ctx = can.getContext('2d');
-                const b = can.parentElement.getBoundingClientRect();
-                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
-                ctx.scale(devicePixelRatio, devicePixelRatio);
+            function drawEconomicValueChart(d, indicators, fp, sp) {
+                const ctx = economicCtx; const canvas = economicChart;
+                const cont = canvas.parentElement, w = cont.clientWidth, h = cont.clientHeight;
+                if (w <= 0 || h <= 0) return;
+                canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio); ctx.clearRect(0, 0, w, h);
+
+                if (!d || !indicators) {
+                    ctx.font = "14px sans-serif"; ctx.fillStyle = '#a0a0a0'; ctx.textAlign = 'center';
+                    ctx.fillText('Job Openings Data Not Available', w / 2, h / 2); return;
+                }
+
+                const { fastEma, slowEma } = indicators;
+                const allVis = [...fastEma.filter(v=>v), ...slowEma.filter(v=>v)];
+                if (allVis.length === 0) return;
+
+                const minY = Math.min(...allVis), maxY = Math.max(...allVis);
+                const m = { t: 20, r: 50, b: 40, l: 50 }, cW = w - m.l - m.r, cH = h - m.t - m.b;
+                const mX = (i) => m.l + (d.length > 1 ? (i / (d.length - 1)) * cW : cW / 2);
+                const mY = (v) => h - m.b - ((v - minY) / (maxY - minY)) * cH;
+
+                ctx.font = "12px sans-serif"; ctx.textAlign = 'right'; ctx.fillStyle = '#a0a0a0';
+                for (let i = 0; i <= 5; i++) {
+                    const val = minY + (i / 5) * (maxY - minY);
+                    const y = mY(val);
+                    ctx.beginPath();ctx.strokeStyle='#444';ctx.lineWidth=0.5;ctx.moveTo(m.l,y);ctx.lineTo(w-m.r,y);ctx.stroke();
+                    ctx.fillText(val.toFixed(0), m.l - 8, y + 4);
+                }
                 
-                const all = [...data.prices, ...data.fastEma.filter(v=>v), ...data.slowEma.filter(v=>v)];
-                const min = Math.min(...all), max = Math.max(...all);
-                const m = {t:20, b:30, l:50, r:10}, w = b.width, h = b.height;
-                const getX = (i) => m.l + (i/(dates.length-1))*(w-m.l-m.r);
-                const getY = (v) => h - m.b - ((v-min)/(max-min))*(h-m.t-m.b);
-
-                data.phases.forEach((ph, i) => {
-                    ctx.fillStyle = s[ph.toLowerCase()+'Color'] + '26';
-                    ctx.fillRect(getX(i), m.t, getX(i+1)-getX(i)+1 || 1, h-m.t-m.b);
-                });
-
-                const drawL = (d, col, lw=1) => {
-                    ctx.beginPath(); ctx.strokeStyle = col; ctx.lineWidth = lw;
-                    d.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
-                    ctx.stroke();
-                };
-                drawL(data.prices, '#a0a0a0', 1.5); drawL(data.fastEma, '#3273dc'); drawL(data.slowEma, '#23d160');
-                drawL(data.sma1, '#ff9800'); drawL(data.sma2, '#c56bf0');
-            }
-
-            function drawMacdChart(id, dates, ml, sl, hst, label) {
-                const can = document.getElementById(id), ctx = can.getContext('2d');
-                const b = can.parentElement.getBoundingClientRect();
-                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
-                ctx.scale(devicePixelRatio, devicePixelRatio);
+                const yZ=mY(0);ctx.beginPath();ctx.strokeStyle='#a0a0a0';ctx.lineWidth=1;ctx.setLineDash([2,3]);ctx.moveTo(m.l,yZ);ctx.lineTo(w-m.r,yZ);ctx.stroke();ctx.setLineDash([]);
                 
-                const all = [...ml.filter(v=>v), ...sl.filter(v=>v), ...hst.filter(v=>v)];
-                const min = Math.min(...all), max = Math.max(...all);
-                const m = {t:20, b:20, l:50, r:10}, w = b.width, h = b.height;
-                const getX = (i) => m.l + (i/(dates.length-1))*(w-m.l-m.r);
-                const getY = (v) => h - m.b - ((v-min)/(max-min))*(h-m.t-m.b);
-                const zero = getY(0);
+                const xTS=Math.max(1,Math.floor(d.length/Math.floor(cW/100))); 
+                for(let i=0;i<d.length;i+=xTS){ctx.textAlign='center';ctx.fillText(d[i],mX(i),h-m.b+20);} 
 
-                hst.forEach((v, i) => {
-                    if(v==null) return;
-                    ctx.fillStyle = v >= 0 ? 'rgba(35,209,96,0.7)' : 'rgba(255,56,96,0.7)';
-                    ctx.fillRect(getX(i)-1, getY(v), 2, zero - getY(v));
-                });
-                const drawL = (d, col) => {
-                    ctx.beginPath(); ctx.strokeStyle = col;
-                    d.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
-                    ctx.stroke();
-                };
-                drawL(ml, '#007bff'); drawL(sl, '#fd7e14');
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 15);
+                drawLine(ctx, fastEma, mX, mY, '#3273dc');
+                drawLine(ctx, slowEma, mX, mY, '#23d160');
+
+                const legX=m.l+10,legY=m.t+10,lSp=18; ctx.font="14px sans-serif";ctx.textAlign='left';
+                ctx.fillStyle = '#3273dc'; ctx.fillText(`Job Openings Fast EMA (${fp})`, legX, legY);
+                ctx.fillStyle = '#23d160'; ctx.fillText(`Job Openings Slow EMA (${sp})`, legX, legY + lSp);
             }
 
-            function drawEcoChart(dates, eco, fp, sp) {
-                const can = document.getElementById('economicChart'), ctx = can.getContext('2d');
-                const b = can.parentElement.getBoundingClientRect();
-                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
-                ctx.scale(devicePixelRatio, devicePixelRatio);
-                const f = eco.fastEma.slice(-dates.length), s = eco.slowEma.slice(-dates.length);
-                const all = [...f.filter(v=>v), ...s.filter(v=>v)];
-                const min = Math.min(...all), max = Math.max(...all);
-                const m = {t:20, b:20, l:50, r:10}, w = b.width, h = b.height;
-                const getX = (i) => m.l + (i/(dates.length-1))*(w-m.l-m.r);
-                const getY = (v) => h - m.b - ((v-min)/(max-min))*(h-m.t-m.b);
-                const drawL = (d, col) => {
-                    ctx.beginPath(); ctx.strokeStyle = col;
-                    d.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
-                    ctx.stroke();
-                };
-                drawL(f, '#3273dc'); drawL(s, '#23d160');
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(`Job Openings (${fp}/${sp})`, 10, 15);
-            }
+            function drawEconomicMACDChart(d, indicators) {
+                const ctx = economicMACDCtx; const canvas = economicMACDChart;
+                const cont = canvas.parentElement, w = cont.clientWidth, h = cont.clientHeight;
+                if (w <= 0 || h <= 0) return;
+                canvas.width = w * devicePixelRatio; canvas.height = h * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio); ctx.clearRect(0, 0, w, h);
 
-            // --- SECTION 7: SETTINGS MANAGEMENT ---
-            function updateCurrentPhaseStatus(ph, dt, s) {
-                const cur = ph[ph.length-1];
-                currentPhaseStatus.textContent = cur.replace('_',' ') + " (" + dt[dt.length-1] + ")";
-                currentPhaseStatus.style.color = s[cur.toLowerCase() + 'Color'];
-            }
+                if (!d || !indicators) return;
 
-            function getFilterStartIndex(p) {
-                const tp = allDates.length;
-                if (p === 'all') return 0;
-                return Math.max(0, tp - Math.floor(parseInt(p) * 52.17));
-            }
+                const { macdLine, signalLine, histogram } = indicators;
+                const allVis = [...macdLine.filter(v=>v),...signalLine.filter(v=>v),...histogram.filter(v=>v)];
+                if (allVis.length === 0) return;
+                
+                const minY = Math.min(...allVis), maxY = Math.max(...allVis);
+                const m = { t: 20, r: 50, b: 20, l: 50 }, cW = w - m.l - m.r, cH = h - m.t - m.b;
+                const mX = (i) => m.l + (d.length > 1 ? (i / (d.length - 1)) * cW : cW / 2);
+                const mY = (v) => h - m.b - ((v - minY) / (maxY - minY)) * cH;
 
-            function buildSettingsPage() {
-                const container = document.getElementById('settingsContainer');
-                container.innerHTML = `
-                    <h2 class="title is-4 has-text-light">Chart Display</h2>
-                    <div class="field settings-field"><label class="label">Time Period</label><div class="select is-fullwidth"><select id="timePeriodSelector">
-                        <option value="all">All Time</option><option value="10">10 Years</option><option value="5">5 Years</option><option value="3">3 Years</option><option value="1">1 Year</option>
-                    </select></div></div>
-                    <hr style="background-color: var(--dark-border);">
-                    <h2 class="title is-4 has-text-light">MA Periods</h2>
-                    <div class="field settings-field"><label class="label">Fast EMA</label><input class="input" type="number" id="fastEmaInput"></div>
-                    <div class="field settings-field"><label class="label">Slow EMA</label><input class="input" type="number" id="slowEmaInput"></div>
-                    <div class="field settings-field"><label class="label">SMA 1</label><input class="input" type="number" id="sma1Input"></div>
-                    <div class="field settings-field"><label class="label">SMA 2</label><input class="input" type="number" id="sma2Input"></div>
-                    <hr style="background-color: var(--dark-border);">
-                    <h2 class="title is-4 has-text-light">Pre-Downtrend Trigger</h2>
-                    <div class="slider-container"><input class="slider is-fullwidth is-info" type="range" id="preDowntrendHistogramsInput" min="1" max="10"><span id="preDowntrendHistogramsValue" class="tag is-info">3</span></div>
-                    <hr style="background-color: var(--dark-border);">
-                    <h2 class="title is-4 has-text-light">Phase Colors</h2>
-                    <div class="field settings-field"><label class="label">New Uptrend</label><input class="input" type="color" id="new_uptrendColorInput"></div>
-                    <div class="field settings-field"><label class="label">Late Uptrend</label><input class="input" type="color" id="late_uptrendColorInput"></div>
-                    <div class="field settings-field"><label class="label">Warning</label><input class="input" type="color" id="pre_downtrendColorInput"></div>
-                    <div class="field settings-field"><label class="label">Downtrend</label><input class="input" type="color" id="downtrendColorInput"></div>
-                `;
-                const ids = ['timePeriodSelector', 'fastEmaInput', 'slowEmaInput', 'sma1Input', 'sma2Input', 'new_uptrendColorInput', 'late_uptrendColorInput', 'pre_downtrendColorInput', 'downtrendColorInput', 'preDowntrendHistogramsInput'];
-                ids.forEach(id => document.getElementById(id).onchange = () => { saveSettings(); processAndDraw(); });
-                document.getElementById('preDowntrendHistogramsInput').oninput = (e) => document.getElementById('preDowntrendHistogramsValue').textContent = e.target.value;
-            }
-
-            function getSettings() {
-                const defaults = { timePeriod:'5', fastEma:'10', slowEma:'20', sma1:'50', sma2:'200', preDowntrendHistograms:'3', new_uptrendColor:'#04aa6d', late_uptrendColor:'#ffdd57', pre_downtrendColor:'#ff9800', downtrendColor:'#ff3860' };
-                const saved = localStorage.getItem(SETTINGS_KEY);
-                return saved ? {...defaults, ...JSON.parse(saved)} : defaults;
-            }
-
-            function loadSettings() {
-                const s = getSettings();
-                Object.keys(s).forEach(k => {
-                    const suffix = k.includes('Color') ? 'Input' : k === 'preDowntrendHistograms' ? 'Input' : k === 'timePeriod' ? 'Selector' : 'Input';
-                    const el = document.getElementById(k + suffix);
-                    if(el) el.value = s[k];
-                });
-                document.getElementById('preDowntrendHistogramsValue').textContent = s.preDowntrendHistograms;
-            }
-
-            function saveSettings() {
-                const s = {};
-                ['timePeriod', 'fastEma', 'slowEma', 'sma1', 'sma2', 'preDowntrendHistograms', 'new_uptrendColor', 'late_uptrendColor', 'pre_downtrendColor', 'downtrendColor'].forEach(k => {
-                    const suffix = k.includes('Color') ? 'Input' : k === 'preDowntrendHistograms' ? 'Input' : k === 'timePeriod' ? 'Selector' : 'Input';
-                    s[k] = document.getElementById(k + suffix).value;
-                });
-                localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+                const yZ = mY(0);
+                ctx.beginPath();ctx.strokeStyle='#a0a0a0';ctx.lineWidth=1;ctx.moveTo(m.l,yZ);ctx.lineTo(w-m.r,yZ);ctx.stroke();
+                
+                const bW = Math.max(1, cW / d.length * 0.8);
+                for (let i = 0; i < histogram.length; i++) {
+                    if (histogram[i] !== null) {
+                        const x = mX(i) - bW / 2;
+                        const y = mY(histogram[i]);
+                        ctx.fillStyle = histogram[i] > 0 ? 'rgba(35,209,96,0.7)' : 'rgba(255,56,96,0.7)';
+                        ctx.fillRect(x, y, bW, yZ - y);
+                    }
+                }
+                
+                drawLine(ctx, macdLine, mX, mY, '#007bff');
+                drawLine(ctx, signalLine, mX, mY, '#fd7e14');
+                
+                const legX=m.l+10,legY=m.t+10,lSp=18; ctx.font="14px sans-serif";ctx.textAlign='left';
+                ctx.fillStyle = '#007bff'; ctx.fillText('Job Openings MACD', legX, legY);
+                ctx.fillStyle = '#fd7e14'; ctx.fillText('Job Openings Signal', legX, legY + lSp);
             }
         })();
     </script>

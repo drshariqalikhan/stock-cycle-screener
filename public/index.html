@@ -14,7 +14,7 @@
 
     <style>
         :root { --dark-bg: #1a1d21; --dark-card: #272a2e; --border: #444; --text: #f0f0f0; }
-        html, body { background-color: var(--dark-bg); color: var(--text); height: 100%; margin: 0; font-family: sans-serif; }
+        html, body { background-color: var(--dark-bg); color: var(--text); height: 100%; margin: 0; font-family: sans-serif; overflow: hidden; }
         .navbar { background-color: var(--dark-card); border-bottom: 1px solid var(--border); }
         .navbar-item { color: var(--text) !important; }
         .input { background-color: var(--dark-bg); border-color: var(--border); color: var(--text); }
@@ -24,11 +24,11 @@
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         #settingsPage { display: none; }
         .setting-row { margin-bottom: 1rem; max-width: 400px; }
+        .status-text { font-size: 0.9rem; margin-bottom: 0.5rem; }
     </style>
 </head>
 <body>
 
-    <!-- MAIN PAGE -->
     <div id="mainPage" class="page">
         <nav class="navbar">
             <div class="navbar-brand">
@@ -39,7 +39,7 @@
                 <div class="navbar-start">
                     <div class="navbar-item">
                         <div class="field is-grouped">
-                            <p class="control"><input class="input is-small" type="text" id="tickerInput" value="VT.US"></p>
+                            <p class="control"><input class="input is-small" type="text" id="tickerInput" value="VT"></p>
                             <p class="control"><button id="btnFetch" class="button is-info is-small">Fetch</button></p>
                         </div>
                     </div>
@@ -49,15 +49,14 @@
         </nav>
 
         <main class="page-content">
+            <div id="msg" class="has-text-centered status-text has-text-grey">Ready</div>
             <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="macdChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="ecoChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="ecoMacdChart"></canvas></div>
-            <p id="msg" class="has-text-centered is-size-7 has-text-grey"></p>
         </main>
     </div>
 
-    <!-- SETTINGS PAGE -->
     <div id="settingsPage" class="page">
         <nav class="navbar"><div class="navbar-brand"><a class="navbar-item" id="btnBack"> < Back </a></div></nav>
         <main class="page-content" id="settingsBody"></main>
@@ -68,64 +67,68 @@
             const PHASES = { DOWNTREND: 'DOWNTREND', NEW_UPTREND: 'NEW_UPTREND', LATE_UPTREND: 'LATE_UPTREND', PRE_DOWNTREND: 'PRE_DOWNTREND' };
             let state = { dates: [], prices: [], eco: null };
 
-            // --- PWA & UI ---
-            if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
-
             const $ = (id) => document.getElementById(id);
+
+            // UI Actions
             $('btnFetch').onclick = fetchData;
-            $('navSettings').onclick = () => { $('mainPage').style.display='none'; $('settingsPage').style.display='flex'; };
+            $('navSettings').onclick = () => { $('mainPage').style.display='none'; $('settingsPage').style.display='flex'; buildSettings(); };
             $('btnBack').onclick = () => { $('settingsPage').style.display='none'; $('mainPage').style.display='flex'; };
 
-            const burger = document.querySelector('.navbar-burger');
-            burger.onclick = () => { burger.classList.toggle('is-active'); $('navMenu').classList.toggle('is-active'); };
-
-            // --- DATA ---
             async function fetchData() {
                 const ticker = $('tickerInput').value.trim().toUpperCase();
-                $('msg').textContent = "Connecting to Render server...";
+                $('msg').textContent = "Fetching Yahoo Finance Data...";
                 try {
-                    const [pRes, eRes] = await Promise.all([fetch(`/api/price/${ticker}`), fetch(`/api/economic`)]);
-                    if (!pRes.ok) throw new Error("Ticker not found on Stooq. Use suffix (e.g. AAPL.US)");
+                    const [pRes, eRes] = await Promise.all([
+                        fetch(`/api/price/${ticker}`),
+                        fetch(`/api/economic`)
+                    ]);
+
+                    if (!pRes.ok) throw new Error("Stock ticker not found.");
                     
-                    const pCsv = await pRes.text();
+                    const pJson = await pRes.json();
                     const eCsv = await eRes.text();
 
-                    parsePrices(pCsv);
-                    state.eco = parseEco(eCsv);
+                    parseYahooData(pJson);
+                    state.eco = parseEcoData(eCsv);
                     
-                    $('msg').textContent = `Loaded ${ticker}`;
+                    $('msg').textContent = `Displaying ${ticker}`;
                     render();
-                } catch (e) { $('msg').textContent = e.message; }
+                } catch (e) { 
+                    $('msg').textContent = `Error: ${e.message}`; 
+                }
             }
 
-            function parsePrices(csv) {
-                const lines = csv.trim().split('\n');
-                const delimiter = lines[0].includes(';') ? ';' : ',';
-                const header = lines.shift().split(delimiter).map(h => h.trim().toUpperCase());
-                const dateIdx = header.indexOf('DATE'), closeIdx = header.indexOf('CLOSE');
-                
-                state.dates = []; state.prices = [];
-                lines.forEach(l => {
-                    const c = l.split(delimiter);
-                    if (c[closeIdx]) {
-                        state.dates.push(c[dateIdx]);
-                        state.prices.push(parseFloat(c[closeIdx]));
+            function parseYahooData(json) {
+                const result = json.chart.result[0];
+                const timestamps = result.timestamp;
+                const closePrices = result.indicators.quote[0].close;
+
+                state.dates = [];
+                state.prices = [];
+
+                timestamps.forEach((ts, i) => {
+                    const price = closePrices[i];
+                    if (price !== null && price !== undefined) {
+                        const date = new Date(ts * 1000).toISOString().split('T')[0];
+                        state.dates.push(date);
+                        state.prices.push(price);
                     }
                 });
             }
 
-            function parseEco(csv) {
+            function parseEcoData(csv) {
                 const lines = csv.trim().split('\n');
-                lines.shift();
+                lines.shift(); // Remove header
                 return lines.map(l => {
                     const [d, v] = l.split(',');
                     return { d, v: parseFloat(v) };
                 }).filter(o => !isNaN(o.v));
             }
 
-            // --- CALCS ---
+            // Calculations
             const ema = (data, p) => {
                 const k = 2/(p+1), res = new Array(data.length).fill(null);
+                if (data.length < p) return res;
                 let sum = 0; for(let i=0; i<p; i++) sum += data[i];
                 res[p-1] = sum/p;
                 for(let i=p; i<data.length; i++) res[i] = data[i]*k + res[i-1]*(1-k);
@@ -141,7 +144,7 @@
                 return { ml, sl: fullSl, hist };
             };
 
-            // --- RENDER ---
+            // Rendering Logic
             function render() {
                 const settings = getSet();
                 const stock = {
@@ -154,23 +157,25 @@
                 let alignedEco = null;
                 if (state.eco) {
                     const vals = state.dates.map(d => {
-                        const m = state.eco.find(e => e.d <= d);
+                        const m = [...state.eco].reverse().find(e => e.d <= d);
                         return m ? m.v : null;
                     });
                     alignedEco = { v: vals, f: ema(vals, 10), macd: getMACD(vals) };
                 }
 
-                // Phase Logic
+                // Cycle Phase Algorithm
                 const phases = new Array(stock.p.length).fill(PHASES.DOWNTREND);
                 for(let i=1; i<stock.p.length; i++){
                     const f=stock.f[i], s=stock.s[i], ml=stock.macd.ml[i], sl=stock.macd.sl[i], prev=phases[i-1];
                     if(!f || !s) continue;
-                    if(f < s) phases[i] = PHASES.DOWNTREND;
-                    else {
+                    
+                    if(f < s) {
+                        phases[i] = PHASES.DOWNTREND;
+                    } else {
                         if(prev === PHASES.DOWNTREND) phases[i] = PHASES.NEW_UPTREND;
                         else if(ml < sl) {
                             const ecoHist = alignedEco ? alignedEco.macd.hist[i] : 0;
-                            // Pre-downtrend if Stock histogram is falling AND economy is weak
+                            // Pre-Downtrend trigger: falling Stock Hist + Negative Eco Hist
                             if(ecoHist < 0 && stock.macd.hist[i] < stock.macd.hist[i-1]) phases[i] = PHASES.PRE_DOWNTREND;
                             else phases[i] = PHASES.LATE_UPTREND;
                         } else phases[i] = PHASES.NEW_UPTREND;
@@ -178,11 +183,12 @@
                 }
 
                 const start = Math.max(0, state.dates.length - (parseInt(settings.years)*52));
-                drawPrice($('priceChart'), state.dates.slice(start), stock, phases.slice(start), settings);
-                drawMacd($('macdChart'), stock.macd, start, "Stock MACD");
+                drawPriceChart($('priceChart'), state.dates.slice(start), stock, phases.slice(start), settings);
+                drawMacdChart($('macdChart'), stock.macd, start, "Stock MACD");
+                
                 if (alignedEco) {
-                    drawPrice($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f, s:alignedEco.v}, null, settings, "Job Openings");
-                    drawMacd($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
+                    drawPriceChart($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f}, null, settings, "Job Openings");
+                    drawMacdChart($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
                 }
 
                 const lastPhase = phases[phases.length-1];
@@ -190,16 +196,17 @@
                 $('statusTag').style.color = settings['c' + lastPhase];
             }
 
-            function setup(can) {
+            function setupCanvas(can) {
                 const dpr = window.devicePixelRatio || 1, b = can.getBoundingClientRect();
                 can.width = b.width * dpr; can.height = b.height * dpr;
                 const ctx = can.getContext('2d'); ctx.scale(dpr, dpr);
                 return { ctx, w: b.width, h: b.height };
             }
 
-            function drawPrice(can, dates, data, phases, set, label="Price") {
-                const {ctx, w, h} = setup(can);
-                const p = data.p.slice(-dates.length), min = Math.min(...p.filter(v=>v)), max = Math.max(...p.filter(v=>v));
+            function drawPriceChart(can, dates, data, phases, set, label="Price") {
+                const {ctx, w, h} = setupCanvas(can);
+                const p = data.p.slice(-dates.length), filtered = p.filter(v=>v!==null);
+                const min = Math.min(...filtered), max = Math.max(...filtered);
                 const pad = 30, getX = (i) => pad + (i/(dates.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
 
                 if(phases) phases.forEach((ph, i) => {
@@ -207,26 +214,31 @@
                     ctx.fillRect(getX(i), pad, getX(i+1)-getX(i)+1, h-pad*2);
                 });
 
-                ctx.beginPath(); ctx.strokeStyle = '#3273dc';
-                p.forEach((v, i) => i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v)));
+                ctx.beginPath(); ctx.strokeStyle = '#3273dc'; ctx.lineWidth = 1.5;
+                p.forEach((v, i) => {
+                    if (v === null) return;
+                    i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v));
+                });
                 ctx.stroke();
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
+                ctx.fillStyle = '#a0a0a0'; ctx.font = "12px sans-serif"; ctx.fillText(label, 10, 20);
             }
 
-            function drawMacd(can, macd, start, label) {
-                const {ctx, w, h} = setup(can);
-                const hst = macd.hist.slice(start), min = Math.min(...hst.filter(v=>v)), max = Math.max(...hst.filter(v=>v));
+            function drawMacdChart(can, macd, start, label) {
+                const {ctx, w, h} = setupCanvas(can);
+                const hst = macd.hist.slice(start), filtered = hst.filter(v=>v!==null);
+                if (filtered.length === 0) return;
+                const min = Math.min(...filtered), max = Math.max(...filtered);
                 const pad = 30, getX = (i) => pad + (i/(hst.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
                 const zero = getY(0);
 
                 hst.forEach((v, i) => {
+                    if (v === null) return;
                     ctx.fillStyle = v >= 0 ? '#23d16088' : '#ff386088';
                     ctx.fillRect(getX(i)-1, getY(v), 2, zero - getY(v));
                 });
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
+                ctx.fillStyle = '#a0a0a0'; ctx.font = "12px sans-serif"; ctx.fillText(label, 10, 20);
             }
 
-            // --- SETTINGS ---
             function getSet() {
                 const d = { years:'5', fast:'10', slow:'20', cDOWNTREND:'#ff3860', cNEW_UPTREND:'#23d160', cLATE_UPTREND:'#ffdd57', cPRE_DOWNTREND:'#ff9800' };
                 const s = localStorage.getItem('cycle_sets');
@@ -236,9 +248,9 @@
             function buildSettings() {
                 const s = getSet();
                 const fields = [
-                    {k:'years', l:'Years to Show', t:'number'},
-                    {k:'fast', l:'Fast EMA', t:'number'},
-                    {k:'slow', l:'Slow EMA', t:'number'},
+                    {k:'years', l:'Timeline (Years)', t:'number'},
+                    {k:'fast', l:'Fast EMA Period', t:'number'},
+                    {k:'slow', l:'Slow EMA Period', t:'number'},
                     {k:'cDOWNTREND', l:'Downtrend Color', t:'color'},
                     {k:'cNEW_UPTREND', l:'New Uptrend Color', t:'color'},
                     {k:'cLATE_UPTREND', l:'Late Uptrend Color', t:'color'},
@@ -246,7 +258,7 @@
                 ];
                 $('settingsBody').innerHTML = fields.map(f => `
                     <div class="setting-row">
-                        <label class="label is-small">${f.l}</label>
+                        <label class="label is-small has-text-grey-light">${f.l}</label>
                         <input class="input is-small set-in" type="${f.t}" data-k="${f.k}" value="${s[f.k]}">
                     </div>
                 `).join('');
@@ -256,8 +268,8 @@
                     render();
                 });
             }
-            buildSettings();
-            fetchData();
+
+            fetchData(); // Initial load
         })();
     </script>
 </body>

@@ -7,42 +7,32 @@
     
     <link rel="manifest" href="/manifest.json">
     <meta name="theme-color" content="#1a1d21">
-    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
 
     <style>
-        :root { --dark-bg-1: #1a1d21; --dark-bg-2: #272a2e; --dark-border: #444; --light-text: #f0f0f0; --dim-text: #a0a0a0; }
-        html { background-color: var(--dark-bg-1); height: 100svh; }
-        body { background-color: var(--dark-bg-1); color: var(--light-text); display: flex; flex-direction: column; height: 100%; margin: 0; overflow: hidden; }
-        
-        .navbar { background-color: var(--dark-bg-2); border-bottom: 1px solid var(--dark-border); }
-        .navbar-item, .navbar-link { color: var(--light-text); }
-        .input, .select select { background-color: var(--dark-bg-1); border-color: var(--dark-border); color: var(--light-text); }
-        
-        .page { display: flex; flex-direction: column; height: 100%; width: 100%; overflow: hidden; }
-        .page-content { flex-grow: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 1rem; }
-
-        .chart-container { display: flex; flex-direction: column; gap: 1rem; min-height: 1200px; }
-        .chart-wrapper { background-color: var(--dark-bg-2); border-radius: 8px; height: 300px; position: relative; width: 100%; }
+        :root { --dark-bg: #1a1d21; --dark-card: #272a2e; --border: #444; --text: #f0f0f0; }
+        html, body { background-color: var(--dark-bg); color: var(--text); height: 100%; margin: 0; font-family: sans-serif; }
+        .navbar { background-color: var(--dark-card); border-bottom: 1px solid var(--border); }
+        .navbar-item { color: var(--text) !important; }
+        .input { background-color: var(--dark-bg); border-color: var(--border); color: var(--text); }
+        .page { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
+        .page-content { flex-grow: 1; overflow-y: auto; padding: 1rem; }
+        .chart-wrapper { background-color: var(--dark-card); border-radius: 8px; height: 280px; position: relative; margin-bottom: 1rem; width: 100%; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
-
-        .settings-field { max-width: 500px; margin-bottom: 1.5rem; }
-        .slider-container { display: flex; align-items: center; gap: 1rem; }
-        
-        /* Hidden by default */
         #settingsPage { display: none; }
+        .setting-row { margin-bottom: 1rem; max-width: 400px; }
     </style>
 </head>
 <body>
 
-    <!-- PAGE 1: MAIN APP -->
+    <!-- MAIN PAGE -->
     <div id="mainPage" class="page">
-        <nav class="navbar is-fixed-top" role="navigation">
+        <nav class="navbar">
             <div class="navbar-brand">
-                <div id="currentPhaseStatus" class="navbar-item has-text-weight-bold">CycleScreener</div>
+                <div id="statusTag" class="navbar-item has-text-weight-bold">CycleScreener</div>
                 <a role="button" class="navbar-burger" data-target="navMenu"><span></span><span></span><span></span></a>
             </div>
             <div id="navMenu" class="navbar-menu">
@@ -50,397 +40,224 @@
                     <div class="navbar-item">
                         <div class="field is-grouped">
                             <p class="control"><input class="input is-small" type="text" id="tickerInput" value="VT.US"></p>
-                            <p class="control"><button id="fetchButton" class="button is-info is-small">Fetch</button></p>
+                            <p class="control"><button id="btnFetch" class="button is-info is-small">Fetch</button></p>
                         </div>
                     </div>
-                    <a class="navbar-item" id="goToSettings">Settings</a>
+                    <a class="navbar-item" id="navSettings">Settings</a>
                 </div>
             </div>
         </nav>
 
-        <main class="page-content" style="margin-top: 3.25rem;">
-            <div class="chart-container">
-                <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
-                <div class="chart-wrapper"><canvas id="macdChart"></canvas></div>
-                <div class="chart-wrapper"><canvas id="economicChart"></canvas></div>
-                <div class="chart-wrapper"><canvas id="economicMACDChart"></canvas></div>
-                <div id="statusMessage" class="has-text-centered is-size-7 has-text-grey"></div>
-            </div>
+        <main class="page-content">
+            <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
+            <div class="chart-wrapper"><canvas id="macdChart"></canvas></div>
+            <div class="chart-wrapper"><canvas id="ecoChart"></canvas></div>
+            <div class="chart-wrapper"><canvas id="ecoMacdChart"></canvas></div>
+            <p id="msg" class="has-text-centered is-size-7 has-text-grey"></p>
         </main>
     </div>
 
-    <!-- PAGE 2: SETTINGS -->
+    <!-- SETTINGS PAGE -->
     <div id="settingsPage" class="page">
-        <nav class="navbar">
-            <div class="navbar-brand"><a class="navbar-item" id="backToMain"> < Back </a></div>
-        </nav>
-        <main class="page-content">
-            <div id="settingsUI"></div>
-        </main>
+        <nav class="navbar"><div class="navbar-brand"><a class="navbar-item" id="btnBack"> < Back </a></div></nav>
+        <main class="page-content" id="settingsBody"></main>
     </div>
-    
+
     <script>
         (function() {
-            // --- CONSTANTS & STATE ---
-            const SETTINGS_KEY = 'cycle_pwa_settings';
             const PHASES = { DOWNTREND: 'DOWNTREND', NEW_UPTREND: 'NEW_UPTREND', LATE_UPTREND: 'LATE_UPTREND', PRE_DOWNTREND: 'PRE_DOWNTREND' };
-            let allDates = [], allPrices = [], economicDataRaw = null;
+            let state = { dates: [], prices: [], eco: null };
 
-            // --- DOM ELEMENTS ---
-            const tickerInput = document.getElementById('tickerInput');
-            const fetchButton = document.getElementById('fetchButton');
-            const statusMessage = document.getElementById('statusMessage');
-            const currentPhaseStatus = document.getElementById('currentPhaseStatus');
+            // --- PWA & UI ---
+            if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js');
 
-            // --- INITIALIZATION ---
-            document.addEventListener('DOMContentLoaded', () => {
-                // Register Service Worker for PWA
-                if ('serviceWorker' in navigator) { navigator.serviceWorker.register('/sw.js'); }
+            const $ = (id) => document.getElementById(id);
+            $('btnFetch').onclick = fetchData;
+            $('navSettings').onclick = () => { $('mainPage').style.display='none'; $('settingsPage').style.display='flex'; };
+            $('btnBack').onclick = () => { $('settingsPage').style.display='none'; $('mainPage').style.display='flex'; };
 
-                buildSettingsUI();
-                loadSettings();
+            const burger = document.querySelector('.navbar-burger');
+            burger.onclick = () => { burger.classList.toggle('is-active'); $('navMenu').classList.toggle('is-active'); };
 
-                // Navigation
-                document.getElementById('goToSettings').onclick = () => {
-                    document.getElementById('mainPage').style.display = 'none';
-                    document.getElementById('settingsPage').style.display = 'flex';
-                };
-                document.getElementById('backToMain').onclick = () => {
-                    document.getElementById('settingsPage').style.display = 'none';
-                    document.getElementById('mainPage').style.display = 'flex';
-                };
-
-                // Burger Menu
-                const burger = document.querySelector('.navbar-burger');
-                burger.onclick = () => {
-                    burger.classList.toggle('is-active');
-                    document.getElementById('navMenu').classList.toggle('is-active');
-                };
-
-                fetchButton.onclick = fetchData;
-                tickerInput.onkeypress = (e) => { if (e.key === 'Enter') fetchData(); };
-
-                fetchData(); // Initial load
-            });
-
-            // --- DATA FETCHING ---
+            // --- DATA ---
             async function fetchData() {
-                const ticker = tickerInput.value.trim().toUpperCase();
-                if (!ticker) return;
-                statusMessage.textContent = `Requesting ${ticker}...`;
-
+                const ticker = $('tickerInput').value.trim().toUpperCase();
+                $('msg').textContent = "Connecting to Render server...";
                 try {
-                    const [pRes, eRes] = await Promise.all([
-                        fetch(`/api/price/${ticker}`),
-                        fetch(`/api/economic`)
-                    ]);
-
-                    if (!pRes.ok) throw new Error("Stock ticker not found.");
+                    const [pRes, eRes] = await Promise.all([fetch(`/api/price/${ticker}`), fetch(`/api/economic`)]);
+                    if (!pRes.ok) throw new Error("Ticker not found on Stooq. Use suffix (e.g. AAPL.US)");
                     
-                    const priceCsv = await pRes.text();
-                    const economicCsv = await eRes.text();
+                    const pCsv = await pRes.text();
+                    const eCsv = await eRes.text();
 
-                    parsePriceData(priceCsv);
-                    economicDataRaw = parseEconomicData(economicCsv);
-
-                    statusMessage.textContent = `Data synced for ${ticker}`;
-                    processAndDraw();
-                } catch (err) {
-                    statusMessage.textContent = `Error: ${err.message}`;
-                }
+                    parsePrices(pCsv);
+                    state.eco = parseEco(eCsv);
+                    
+                    $('msg').textContent = `Loaded ${ticker}`;
+                    render();
+                } catch (e) { $('msg').textContent = e.message; }
             }
 
-            function parsePriceData(csv) {
+            function parsePrices(csv) {
                 const lines = csv.trim().split('\n');
-                const header = lines.shift().split(',');
-                const closeIdx = header.findIndex(h => h.toUpperCase().includes('CLOSE'));
-                const dateIdx = header.findIndex(h => h.toUpperCase().includes('DATE'));
-
-                allDates = []; allPrices = [];
-                lines.forEach(line => {
-                    const cols = line.split(',');
-                    if (cols[closeIdx]) {
-                        allDates.push(cols[dateIdx]);
-                        allPrices.push(parseFloat(cols[closeIdx]));
+                const delimiter = lines[0].includes(';') ? ';' : ',';
+                const header = lines.shift().split(delimiter).map(h => h.trim().toUpperCase());
+                const dateIdx = header.indexOf('DATE'), closeIdx = header.indexOf('CLOSE');
+                
+                state.dates = []; state.prices = [];
+                lines.forEach(l => {
+                    const c = l.split(delimiter);
+                    if (c[closeIdx]) {
+                        state.dates.push(c[dateIdx]);
+                        state.prices.push(parseFloat(c[closeIdx]));
                     }
                 });
             }
 
-            function parseEconomicData(csv) {
+            function parseEco(csv) {
                 const lines = csv.trim().split('\n');
-                lines.shift(); // Remove header
-                return lines.map(line => {
-                    const [date, val] = line.split(',');
-                    return { date, value: parseFloat(val) };
-                }).filter(d => !isNaN(d.value));
+                lines.shift();
+                return lines.map(l => {
+                    const [d, v] = l.split(',');
+                    return { d, v: parseFloat(v) };
+                }).filter(o => !isNaN(o.v));
             }
 
-            // --- CALCULATIONS ---
-            function calculateSMA(data, p) {
-                let res = new Array(data.length).fill(null);
-                if (data.length < p) return res;
-                let sum = 0;
-                for(let i=0; i<p; i++) sum += data[i];
-                res[p-1] = sum / p;
-                for(let i=p; i<data.length; i++) {
-                    sum = sum - data[i-p] + data[i];
-                    res[i] = sum / p;
-                }
+            // --- CALCS ---
+            const ema = (data, p) => {
+                const k = 2/(p+1), res = new Array(data.length).fill(null);
+                let sum = 0; for(let i=0; i<p; i++) sum += data[i];
+                res[p-1] = sum/p;
+                for(let i=p; i<data.length; i++) res[i] = data[i]*k + res[i-1]*(1-k);
                 return res;
-            }
+            };
 
-            function calculateEMA(data, p) {
-                let res = new Array(data.length).fill(null);
-                if (data.length < p) return res;
-                const k = 2 / (p + 1);
-                let sum = 0;
-                for(let i=0; i<p; i++) sum += data[i];
-                res[p-1] = sum / p;
-                for(let i=p; i<data.length; i++) {
-                    res[i] = (data[i] * k) + (res[i-1] * (1 - k));
-                }
-                return res;
-            }
-
-            function calculateMACD(data) {
-                const e12 = calculateEMA(data, 12);
-                const e26 = calculateEMA(data, 26);
+            const getMACD = (data) => {
+                const e12 = ema(data, 12), e26 = ema(data, 26);
                 const ml = e12.map((v, i) => (v && e26[i]) ? v - e26[i] : null);
-                const sl = calculateEMA(ml.filter(v => v !== null), 9);
+                const sl = ema(ml.filter(v => v !== null), 9);
                 const fullSl = new Array(ml.length - sl.length).fill(null).concat(sl);
                 const hist = ml.map((v, i) => (v !== null && fullSl[i] !== null) ? v - fullSl[i] : null);
                 return { ml, sl: fullSl, hist };
-            }
+            };
 
-            function determinePhases(stock, eco, triggerCount) {
-                const phases = new Array(stock.prices.length).fill(PHASES.DOWNTREND);
-                for (let i = 1; i < stock.prices.length; i++) {
-                    const fe = stock.fEma[i], se = stock.sEma[i];
-                    const ml = stock.macd.ml[i], sl = stock.macd.sl[i];
-                    const prev = phases[i-1];
+            // --- RENDER ---
+            function render() {
+                const settings = getSet();
+                const stock = {
+                    p: state.prices,
+                    f: ema(state.prices, parseInt(settings.fast)),
+                    s: ema(state.prices, parseInt(settings.slow)),
+                    macd: getMACD(state.prices)
+                };
 
-                    if (!fe || !se) { phases[i] = prev; continue; }
+                let alignedEco = null;
+                if (state.eco) {
+                    const vals = state.dates.map(d => {
+                        const m = state.eco.find(e => e.d <= d);
+                        return m ? m.v : null;
+                    });
+                    alignedEco = { v: vals, f: ema(vals, 10), macd: getMACD(vals) };
+                }
 
-                    if (fe < se) {
-                        phases[i] = PHASES.DOWNTREND;
-                    } else {
-                        // Uptrending logic
-                        if (prev === PHASES.DOWNTREND) phases[i] = PHASES.NEW_UPTREND;
-                        else if (prev === PHASES.NEW_UPTREND && ml < sl) phases[i] = PHASES.LATE_UPTREND;
-                        else if (prev === PHASES.LATE_UPTREND) {
-                            // Check Pre-Downtrend Trigger
-                            let histWarning = true;
-                            for(let j=0; j<triggerCount; j++) {
-                                if (stock.macd.hist[i-j] >= 0 || stock.macd.hist[i-j] >= stock.macd.hist[i-j-1]) histWarning = false;
-                            }
-                            const ecoWarning = eco && eco.macd.hist[i] < 0;
-                            if (histWarning && ecoWarning) phases[i] = PHASES.PRE_DOWNTREND;
+                // Phase Logic
+                const phases = new Array(stock.p.length).fill(PHASES.DOWNTREND);
+                for(let i=1; i<stock.p.length; i++){
+                    const f=stock.f[i], s=stock.s[i], ml=stock.macd.ml[i], sl=stock.macd.sl[i], prev=phases[i-1];
+                    if(!f || !s) continue;
+                    if(f < s) phases[i] = PHASES.DOWNTREND;
+                    else {
+                        if(prev === PHASES.DOWNTREND) phases[i] = PHASES.NEW_UPTREND;
+                        else if(ml < sl) {
+                            const ecoHist = alignedEco ? alignedEco.macd.hist[i] : 0;
+                            // Pre-downtrend if Stock histogram is falling AND economy is weak
+                            if(ecoHist < 0 && stock.macd.hist[i] < stock.macd.hist[i-1]) phases[i] = PHASES.PRE_DOWNTREND;
                             else phases[i] = PHASES.LATE_UPTREND;
-                        } else {
-                            phases[i] = prev;
-                        }
+                        } else phases[i] = PHASES.NEW_UPTREND;
                     }
                 }
-                return phases;
-            }
 
-            // --- DRAWING & UI ---
-            function processAndDraw() {
-                if (allPrices.length === 0) return;
-
-                const settings = getSettings();
-                const stock = {
-                    prices: allPrices,
-                    fEma: calculateEMA(allPrices, parseInt(settings.fastEma)),
-                    sEma: calculateEMA(allPrices, parseInt(settings.slowEma)),
-                    sma1: calculateSMA(allPrices, parseInt(settings.sma1)),
-                    sma2: calculateSMA(allPrices, parseInt(settings.sma2)),
-                    macd: calculateMACD(allPrices)
-                };
-
-                // Align Economic Data
-                let eco = null;
-                if (economicDataRaw) {
-                    const alignedValues = allDates.map(date => {
-                        const match = economicDataRaw.find(e => e.date <= date);
-                        return match ? match.value : null;
-                    });
-                    eco = {
-                        values: alignedValues,
-                        fEma: calculateEMA(alignedValues, parseInt(settings.fastEma)),
-                        sEma: calculateEMA(alignedValues, parseInt(settings.slowEma)),
-                        macd: calculateMACD(alignedValues)
-                    };
+                const start = Math.max(0, state.dates.length - (parseInt(settings.years)*52));
+                drawPrice($('priceChart'), state.dates.slice(start), stock, phases.slice(start), settings);
+                drawMacd($('macdChart'), stock.macd, start, "Stock MACD");
+                if (alignedEco) {
+                    drawPrice($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f, s:alignedEco.v}, null, settings, "Job Openings");
+                    drawMacd($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
                 }
 
-                const phases = determinePhases(stock, eco, parseInt(settings.preDowntrendTrigger));
-                
-                // Filter by Time Period
-                const startIdx = Math.max(0, allDates.length - (settings.timePeriod === 'all' ? allDates.length : parseInt(settings.timePeriod) * 52));
-                const d = allDates.slice(startIdx);
-                
-                drawPriceChart(d, stock, phases, startIdx, settings);
-                drawMACDChart('macdChart', d, stock.macd, startIdx, "Stock MACD");
-                if (eco) {
-                    drawEcoChart(d, eco, startIdx, settings);
-                    drawMACDChart('economicMACDChart', d, eco.macd, startIdx, "Job Openings MACD");
-                }
-
-                // Update Status
-                const curPhase = phases[phases.length-1];
-                currentPhaseStatus.textContent = curPhase.replace('_', ' ');
-                currentPhaseStatus.style.color = settings[`color${curPhase}`] || '#fff';
+                const lastPhase = phases[phases.length-1];
+                $('statusTag').textContent = lastPhase.replace('_',' ');
+                $('statusTag').style.color = settings['c' + lastPhase];
             }
 
-            function drawPriceChart(dates, stock, phases, start, settings) {
-                const canvas = document.getElementById('priceChart');
-                const ctx = setupCanvas(canvas);
-                const p = stock.prices.slice(start);
-                const f = stock.fEma.slice(start);
-                const s = stock.sEma.slice(start);
-                const ph = phases.slice(start);
+            function setup(can) {
+                const dpr = window.devicePixelRatio || 1, b = can.getBoundingClientRect();
+                can.width = b.width * dpr; can.height = b.height * dpr;
+                const ctx = can.getContext('2d'); ctx.scale(dpr, dpr);
+                return { ctx, w: b.width, h: b.height };
+            }
 
-                const min = Math.min(...p.filter(v => v)), max = Math.max(...p.filter(v => v));
-                const margin = { t: 20, b: 30, l: 40, r: 10 };
-                const w = canvas.width / devicePixelRatio, h = canvas.height / devicePixelRatio;
-                
-                const getX = (i) => margin.l + (i / (dates.length - 1)) * (w - margin.l - margin.r);
-                const getY = (v) => h - margin.b - ((v - min) / (max - min)) * (h - margin.t - margin.b);
+            function drawPrice(can, dates, data, phases, set, label="Price") {
+                const {ctx, w, h} = setup(can);
+                const p = data.p.slice(-dates.length), min = Math.min(...p.filter(v=>v)), max = Math.max(...p.filter(v=>v));
+                const pad = 30, getX = (i) => pad + (i/(dates.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
 
-                // Draw Phase Backgrounds
-                ph.forEach((phase, i) => {
-                    ctx.fillStyle = (settings[`color${phase}`] || '#444') + '33';
-                    const x = getX(i);
-                    const nextX = getX(i+1);
-                    ctx.fillRect(x, margin.t, (nextX - x) || 5, h - margin.t - margin.b);
+                if(phases) phases.forEach((ph, i) => {
+                    ctx.fillStyle = set['c'+ph] + '22';
+                    ctx.fillRect(getX(i), pad, getX(i+1)-getX(i)+1, h-pad*2);
                 });
 
-                // Lines
-                drawLine(ctx, p.map((v, i) => [getX(i), getY(v)]), '#a0a0a0', 1.5);
-                drawLine(ctx, f.map((v, i) => [getX(i), getY(v)]), '#3273dc', 1);
-                drawLine(ctx, s.map((v, i) => [getX(i), getY(v)]), '#23d160', 1);
-            }
-
-            function drawMACDChart(id, dates, macd, start, label) {
-                const canvas = document.getElementById(id);
-                const ctx = setupCanvas(canvas);
-                const ml = macd.ml.slice(start);
-                const sl = macd.sl.slice(start);
-                const hi = macd.hist.slice(start);
-
-                const all = [...ml, ...sl, ...hi].filter(v => v !== null);
-                const min = Math.min(...all), max = Math.max(...all);
-                const margin = { t: 20, b: 20, l: 40, r: 10 };
-                const w = canvas.width / devicePixelRatio, h = canvas.height / devicePixelRatio;
-
-                const getX = (i) => margin.l + (i / (dates.length - 1)) * (w - margin.l - margin.r);
-                const getY = (v) => h - margin.b - ((v - min) / (max - min)) * (h - margin.t - margin.b);
-                const zeroY = getY(0);
-
-                // Histogram
-                hi.forEach((v, i) => {
-                    if (v === null) return;
-                    ctx.fillStyle = v >= 0 ? '#23d16088' : '#ff386088';
-                    ctx.fillRect(getX(i) - 1, getY(v), 2, zeroY - getY(v));
-                });
-
-                drawLine(ctx, ml.map((v, i) => [getX(i), getY(v)]), '#3273dc', 1);
-                drawLine(ctx, sl.map((v, i) => [getX(i), getY(v)]), '#ffdd57', 1);
-                
-                ctx.fillStyle = '#a0a0a0';
-                ctx.fillText(label, margin.l + 5, margin.t + 5);
-            }
-
-            function drawEcoChart(dates, eco, start, settings) {
-                const canvas = document.getElementById('economicChart');
-                const ctx = setupCanvas(canvas);
-                const v = eco.fEma.slice(start);
-                const min = Math.min(...v.filter(n => n)), max = Math.max(...v.filter(n => n));
-                const margin = { t: 20, b: 20, l: 40, r: 10 };
-                const w = canvas.width / devicePixelRatio, h = canvas.height / devicePixelRatio;
-                const getX = (i) => margin.l + (i / (dates.length - 1)) * (w - margin.l - margin.r);
-                const getY = (val) => h - margin.b - ((val - min) / (max - min)) * (h - margin.t - margin.b);
-
-                drawLine(ctx, v.map((val, i) => [getX(i), getY(val)]), '#3273dc', 1.5);
-                ctx.fillStyle = '#a0a0a0';
-                ctx.fillText("Job Openings Trend", margin.l + 5, margin.t + 5);
-            }
-
-            // --- HELPERS ---
-            function setupCanvas(canvas) {
-                const rect = canvas.getBoundingClientRect();
-                canvas.width = rect.width * devicePixelRatio;
-                canvas.height = rect.height * devicePixelRatio;
-                const ctx = canvas.getContext('2d');
-                ctx.scale(devicePixelRatio, devicePixelRatio);
-                ctx.clearRect(0, 0, rect.width, rect.height);
-                return ctx;
-            }
-
-            function drawLine(ctx, points, color, width) {
-                ctx.beginPath();
-                ctx.strokeStyle = color;
-                ctx.lineWidth = width;
-                points.forEach((p, i) => {
-                    if (p[1] === null || isNaN(p[1])) return;
-                    if (i === 0) ctx.moveTo(p[0], p[1]);
-                    else ctx.lineTo(p[0], p[1]);
-                });
+                ctx.beginPath(); ctx.strokeStyle = '#3273dc';
+                p.forEach((v, i) => i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v)));
                 ctx.stroke();
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
             }
 
-            // --- SETTINGS MGT ---
-            function getSettings() {
-                const defaults = {
-                    timePeriod: '5', fastEma: '10', slowEma: '20', sma1: '50', sma2: '200',
-                    preDowntrendTrigger: '3',
-                    colorDOWNTREND: '#ff3860', colorNEW_UPTREND: '#23d160', colorLATE_UPTREND: '#ffdd57', colorPRE_DOWNTREND: '#ff9800'
-                };
-                const saved = localStorage.getItem(SETTINGS_KEY);
-                return saved ? { ...defaults, ...JSON.parse(saved) } : defaults;
-            }
+            function drawMacd(can, macd, start, label) {
+                const {ctx, w, h} = setup(can);
+                const hst = macd.hist.slice(start), min = Math.min(...hst.filter(v=>v)), max = Math.max(...hst.filter(v=>v));
+                const pad = 30, getX = (i) => pad + (i/(hst.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
+                const zero = getY(0);
 
-            function saveSettings() {
-                const settings = {};
-                document.querySelectorAll('.setting-input').forEach(input => {
-                    settings[input.dataset.key] = input.value;
+                hst.forEach((v, i) => {
+                    ctx.fillStyle = v >= 0 ? '#23d16088' : '#ff386088';
+                    ctx.fillRect(getX(i)-1, getY(v), 2, zero - getY(v));
                 });
-                localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
-                processAndDraw();
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
             }
 
-            function buildSettingsUI() {
-                const settings = getSettings();
-                const container = document.getElementById('settingsUI');
-                const fields = [
-                    { label: 'Time Period (Years)', key: 'timePeriod', type: 'select', options: [['1','1 Year'],['3','3 Years'],['5','5 Years'],['10','10 Years'],['all','All Time']] },
-                    { label: 'Fast EMA', key: 'fastEma', type: 'number' },
-                    { label: 'Slow EMA', key: 'slowEma', type: 'number' },
-                    { label: 'Pre-Downtrend Trigger (Weeks)', key: 'preDowntrendTrigger', type: 'number' },
-                    { label: 'Downtrend Color', key: 'colorDOWNTREND', type: 'color' },
-                    { label: 'New Uptrend Color', key: 'colorNEW_UPTREND', type: 'color' },
-                    { label: 'Late Uptrend Color', key: 'colorLATE_UPTREND', type: 'color' },
-                    { label: 'Pre-Downtrend Color', key: 'colorPRE_DOWNTREND', type: 'color' }
-                ];
+            // --- SETTINGS ---
+            function getSet() {
+                const d = { years:'5', fast:'10', slow:'20', cDOWNTREND:'#ff3860', cNEW_UPTREND:'#23d160', cLATE_UPTREND:'#ffdd57', cPRE_DOWNTREND:'#ff9800' };
+                const s = localStorage.getItem('cycle_sets');
+                return s ? {...d, ...JSON.parse(s)} : d;
+            }
 
-                container.innerHTML = fields.map(f => `
-                    <div class="field settings-field">
-                        <label class="label has-text-grey-light">${f.label}</label>
-                        <div class="control">
-                            ${f.type === 'select' ? `
-                                <div class="select is-fullwidth"><select class="setting-input" data-key="${f.key}">
-                                    ${f.options.map(o => `<option value="${o[0]}" ${settings[f.key] == o[0] ? 'selected' : ''}>${o[1]}</option>`).join('')}
-                                </select></div>
-                            ` : `<input class="input setting-input" type="${f.type}" data-key="${f.key}" value="${settings[f.key]}">`}
-                        </div>
+            function buildSettings() {
+                const s = getSet();
+                const fields = [
+                    {k:'years', l:'Years to Show', t:'number'},
+                    {k:'fast', l:'Fast EMA', t:'number'},
+                    {k:'slow', l:'Slow EMA', t:'number'},
+                    {k:'cDOWNTREND', l:'Downtrend Color', t:'color'},
+                    {k:'cNEW_UPTREND', l:'New Uptrend Color', t:'color'},
+                    {k:'cLATE_UPTREND', l:'Late Uptrend Color', t:'color'},
+                    {k:'cPRE_DOWNTREND', l:'Warning Color', t:'color'}
+                ];
+                $('settingsBody').innerHTML = fields.map(f => `
+                    <div class="setting-row">
+                        <label class="label is-small">${f.l}</label>
+                        <input class="input is-small set-in" type="${f.t}" data-k="${f.k}" value="${s[f.k]}">
                     </div>
                 `).join('');
-
-                document.querySelectorAll('.setting-input').forEach(el => el.onchange = saveSettings);
+                document.querySelectorAll('.set-in').forEach(el => el.onchange = (e) => {
+                    const cur = getSet(); cur[e.target.dataset.k] = e.target.value;
+                    localStorage.setItem('cycle_sets', JSON.stringify(cur));
+                    render();
+                });
             }
-
-            function loadSettings() { buildSettingsUI(); }
-
+            buildSettings();
+            fetchData();
         })();
     </script>
 </body>

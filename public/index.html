@@ -3,205 +3,345 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>CycleScreener PWA</title>
+    <title>Stock & Economic Cycle Screener</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
     <style>
-        :root { --dark-bg: #1a1d21; --dark-card: #272a2e; --border: #444; --text: #f0f0f0; }
-        html, body { background-color: var(--dark-bg); color: var(--text); height: 100%; margin: 0; font-family: sans-serif; overflow: hidden; }
-        .navbar { background-color: var(--dark-card); border-bottom: 1px solid var(--border); }
-        .navbar-item { color: var(--text) !important; }
-        .input { background-color: var(--dark-bg); border-color: var(--border); color: var(--text); }
-        .page { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
-        .page-content { flex-grow: 1; overflow-y: auto; padding: 1rem; }
-        .chart-wrapper { background-color: var(--dark-card); border-radius: 8px; height: 260px; position: relative; margin-bottom: 1rem; width: 100%; }
-        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        :root { --dark-bg-1: #1a1d21; --dark-bg-2: #272a2e; --dark-border: #444; --light-text: #f0f0f0; --dim-text: #a0a0a0; }
+        html { background-color: var(--dark-bg-1); height: 100svh; }
+        body { background-color: var(--dark-bg-1); color: var(--light-text); display: flex; flex-direction: column; height: 100%; margin: 0; }
+        .navbar { background-color: var(--dark-bg-2); border-bottom: 1px solid var(--dark-border); }
+        .navbar-item, .navbar-link { color: var(--light-text); cursor: pointer; }
+        .navbar-burger span { background-color: var(--light-text); }
+        .input, .select select { background-color: var(--dark-bg-1); border-color: var(--dark-border); color: var(--light-text); }
+        .label { color: var(--light-text); }
+        .page { display: flex; flex-direction: column; height: 100%; width: 100%; }
         #settingsPage { display: none; }
+        .page-content { flex-grow: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding-bottom: env(safe-area-inset-bottom); display: flex; flex-direction: column;}
+        #appContainer { display: flex; flex-direction: column; gap: 1rem; height: 100%; padding: 1rem; }
+        .chart-wrapper { background-color: var(--dark-bg-2); border-radius: 6px; flex: 1; position: relative; min-height: 200px; }
+        canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
+        .content-container { padding: 1.5rem; }
+        .settings-field { max-width: 400px; margin-bottom: 1.5rem; }
+        .slider-container { display: flex; align-items: center; gap: 1rem; }
     </style>
 </head>
 <body>
 
     <div id="mainPage" class="page">
-        <nav class="navbar">
+        <nav class="navbar page-nav" role="navigation">
             <div class="navbar-brand">
-                <div id="statusTag" class="navbar-item has-text-weight-bold">CycleScreener</div>
-                <div class="navbar-item">
-                    <input class="input is-small" type="text" id="tickerInput" value="VT" style="width: 80px;">
-                    <button id="btnFetch" class="button is-info is-small ml-2">Fetch</button>
+                <div id="currentPhaseStatus" class="navbar-item has-text-weight-bold"></div>
+                <a role="button" class="navbar-burger" data-target="navMenu"><span></span><span></span><span></span></a>
+            </div>
+            <div id="navMenu" class="navbar-menu">
+                <div class="navbar-start">
+                    <div class="navbar-item">
+                        <div class="field is-grouped">
+                            <p class="control"><input class="input" type="text" id="tickerInput" value="VT"></p>
+                            <p class="control"><button id="fetchButton" class="button is-info">Fetch</button></p>
+                        </div>
+                    </div>
+                    <a class="navbar-item" id="goToSettingsButton">Settings</a>
                 </div>
             </div>
         </nav>
-
         <main class="page-content">
-            <div id="msg" class="has-text-centered is-size-7 has-text-grey mb-2">Ready</div>
-            <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
-            <div class="chart-wrapper"><canvas id="macdChart"></canvas></div>
-            <div class="chart-wrapper"><canvas id="ecoChart"></canvas></div>
-            <div class="chart-wrapper"><canvas id="ecoMacdChart"></canvas></div>
+            <div id="appContainer">
+                <div id="priceChartWrapper" class="chart-wrapper"><canvas id="priceChart"></canvas></div>
+                <div id="macdChartWrapper" class="chart-wrapper"><canvas id="macdChart"></canvas></div>
+                <div id="economicChartWrapper" class="chart-wrapper"><canvas id="economicChart"></canvas></div>
+                <div id="economicMACDChartWrapper" class="chart-wrapper"><canvas id="economicMACDChart"></canvas></div>
+                <div id="statusMessage" class="has-text-centered is-size-7 has-text-grey" role="status"></div>
+            </div>
         </main>
     </div>
 
+    <div id="settingsPage" class="page">
+        <nav class="navbar page-nav"><div class="navbar-brand"><a class="navbar-item" id="backBtn">< Back</a></div></nav>
+        <main class="page-content"><div class="content-container" id="settingsContainer"></div></main>
+    </div>
+    
     <script>
         (function() {
+            const SETTINGS_KEY = 'stockcycle_settings';
             const PHASES = { DOWNTREND: 'DOWNTREND', NEW_UPTREND: 'NEW_UPTREND', LATE_UPTREND: 'LATE_UPTREND', PRE_DOWNTREND: 'PRE_DOWNTREND' };
-            let state = { dates: [], prices: [], eco: null };
+            let allDates = [], allPrices = [], economicDataRaw = null;
 
-            const $ = (id) => document.getElementById(id);
-            $('btnFetch').onclick = fetchData;
+            // DOM References
+            const tickerInput = document.getElementById('tickerInput');
+            const fetchButton = document.getElementById('fetchButton');
+            const statusMessage = document.getElementById('statusMessage');
+            const currentPhaseStatus = document.getElementById('currentPhaseStatus');
+
+            document.addEventListener('DOMContentLoaded', () => {
+                buildSettingsPage();
+                loadSettings();
+                
+                document.getElementById('goToSettingsButton').onclick = () => { document.getElementById('mainPage').style.display='none'; document.getElementById('settingsPage').style.display='flex'; };
+                document.getElementById('backBtn').onclick = () => { document.getElementById('settingsPage').style.display='none'; document.getElementById('mainPage').style.display='flex'; };
+                
+                const burger = document.querySelector('.navbar-burger');
+                burger.onclick = () => { burger.classList.toggle('is-active'); document.getElementById('navMenu').classList.toggle('is-active'); };
+                
+                fetchButton.onclick = fetchData;
+                tickerInput.onkeypress = (e) => { if (e.key === 'Enter') fetchData(); };
+                
+                fetchData();
+            });
 
             async function fetchData() {
-                const ticker = $('tickerInput').value.trim().toUpperCase();
-                $('msg').textContent = "Contacting server...";
-                $('msg').className = "has-text-centered is-size-7 has-text-grey mb-2";
-
+                const ticker = tickerInput.value.trim().toUpperCase();
+                statusMessage.textContent = `Fetching data for ${ticker}...`;
                 try {
-                    const [pRes, eRes] = await Promise.all([
-                        fetch(`/api/price/${ticker}`),
-                        fetch(`/api/economic`)
-                    ]);
-
-                    if (!pRes.ok) {
-                        const errData = await pRes.json();
-                        throw new Error(errData.error || "Stock data failed");
-                    }
-                    if (!eRes.ok) throw new Error("Economic data failed");
+                    const [pRes, eRes] = await Promise.all([fetch(`/api/price/${ticker}`), fetch(`/api/economic`)]);
+                    if (!pRes.ok) throw new Error("Stock data fetch failed.");
                     
                     const pJson = await pRes.json();
-                    const eCsv = await eRes.text();
+                    parseYahooData(pJson);
 
-                    parseYahooPrices(pJson);
-                    state.eco = parseEco(eCsv);
-                    
-                    $('msg').textContent = `Success: Loaded ${ticker}`;
-                    render();
-                } catch (e) { 
-                    $('msg').textContent = `Error: ${e.message}`; 
-                    $('msg').className = "has-text-centered is-size-7 has-text-danger mb-2";
-                }
+                    const eCsv = await eRes.text();
+                    economicDataRaw = parseFredData(eCsv);
+
+                    statusMessage.textContent = `Loaded ${ticker}.`;
+                    processAndDraw();
+                } catch (e) { statusMessage.textContent = e.message; }
             }
 
-            function parseYahooPrices(json) {
-                const result = json.chart.result[0];
-                const timestamps = result.timestamp || [];
-                const quotes = result.indicators.quote[0].close || [];
-                state.dates = []; state.prices = [];
-                timestamps.forEach((ts, i) => {
-                    if (quotes[i] != null) {
-                        state.dates.push(new Date(ts * 1000).toISOString().split('T')[0]);
-                        state.prices.push(quotes[i]);
+            function parseYahooData(json) {
+                const res = json.chart.result[0];
+                const ts = res.timestamp;
+                const cl = res.indicators.quote[0].close;
+                allDates = []; allPrices = [];
+                ts.forEach((t, i) => {
+                    if (cl[i] != null) {
+                        allDates.push(new Date(t * 1000).toISOString().split('T')[0]);
+                        allPrices.push(cl[i]);
                     }
                 });
             }
 
-            function parseEco(csv) {
+            function parseFredData(csv) {
                 const lines = csv.trim().split('\n');
                 lines.shift();
                 return lines.map(l => {
-                    const [d, v] = l.split(',');
-                    return { d, v: parseFloat(v) };
-                }).filter(o => !isNaN(o.v));
+                    const [date, val] = l.split(',');
+                    return { date, value: parseFloat(val) };
+                }).filter(d => !isNaN(d.value));
             }
 
-            const ema = (data, p) => {
-                const k = 2/(p+1), res = new Array(data.length).fill(null);
-                if (data.length < p) return res;
-                let sum = 0; for(let i=0; i<p; i++) sum += data[i];
-                res[p-1] = sum/p;
-                for(let i=p; i<data.length; i++) res[i] = data[i]*k + res[i-1]*(1-k);
-                return res;
-            };
+            // Calculations
+            function calculateEMA(d, p) {
+                if (d.length < p) return new Array(d.length).fill(null);
+                const k = 2/(p+1), e = new Array(d.length).fill(null);
+                let sum = 0; for(let i=0; i<p; i++) sum += d[i];
+                e[p-1] = sum/p;
+                for(let i=p; i<d.length; i++) e[i] = (d[i]*k) + (e[i-1]*(1-k));
+                return e;
+            }
 
-            const getMACD = (data) => {
-                const e12 = ema(data, 12), e26 = ema(data, 26);
-                const ml = e12.map((v, i) => (v && e26[i]) ? v - e26[i] : null);
-                const sl = ema(ml.filter(v => v !== null), 9);
+            function calculateSMA(d, p) {
+                if (d.length < p) return new Array(d.length).fill(null);
+                const s = new Array(d.length).fill(null);
+                for(let i=p-1; i<d.length; i++) {
+                    let sum = 0; for(let j=0; j<p; j++) sum += d[i-j];
+                    s[i] = sum/p;
+                }
+                return s;
+            }
+
+            function calculateMACD(d) {
+                const e12 = calculateEMA(d, 12), e26 = calculateEMA(d, 26);
+                const ml = e12.map((v,i) => (v && e26[i]) ? v - e26[i] : null);
+                const sl = calculateEMA(ml.filter(v => v !== null), 9);
                 const fullSl = new Array(ml.length - sl.length).fill(null).concat(sl);
-                const hist = ml.map((v, i) => (v !== null && fullSl[i] !== null) ? v - fullSl[i] : null);
-                return { ml, sl: fullSl, hist };
-            };
+                const h = ml.map((v,i) => (v !== null && fullSl[i] !== null) ? v - fullSl[i] : null);
+                return { ml, sl: fullSl, h };
+            }
 
-            function render() {
+            function processAndDraw() {
+                const settings = getSettings();
+                const fp = parseInt(settings.fastEma), sp = parseInt(settings.slowEma);
+                
                 const stock = {
-                    p: state.prices,
-                    f: ema(state.prices, 10),
-                    s: ema(state.prices, 20),
-                    macd: getMACD(state.prices)
+                    prices: allPrices,
+                    fEma: calculateEMA(allPrices, fp),
+                    sEma: calculateEMA(allPrices, sp),
+                    sma1: calculateSMA(allPrices, parseInt(settings.sma1)),
+                    sma2: calculateSMA(allPrices, parseInt(settings.sma2)),
+                    macd: calculateMACD(allPrices)
                 };
 
-                let alignedEco = null;
-                if (state.eco) {
-                    const vals = state.dates.map(d => {
-                        const m = [...state.eco].reverse().find(e => e.d <= d);
-                        return m ? m.v : null;
+                let eco = null;
+                if (economicDataRaw) {
+                    const aligned = allDates.map(d => {
+                        const m = [...economicDataRaw].reverse().find(e => e.date <= d);
+                        return m ? m.value : null;
                     });
-                    alignedEco = { v: vals, f: ema(vals, 10), macd: getMACD(vals) };
+                    eco = { v: aligned, f: calculateEMA(aligned, fp), s: calculateEMA(aligned, sp), macd: calculateMACD(aligned) };
                 }
 
-                const phases = new Array(stock.p.length).fill(PHASES.DOWNTREND);
-                for(let i=1; i<stock.p.length; i++){
-                    const f=stock.f[i], s=stock.s[i], ml=stock.macd.ml[i], sl=stock.macd.sl[i], prev=phases[i-1];
-                    if(!f || !s) continue;
-                    if(f < s) phases[i] = PHASES.DOWNTREND;
+                // Phase Logic
+                const phases = new Array(allPrices.length).fill(PHASES.DOWNTREND);
+                for(let i=1; i<allPrices.length; i++) {
+                    const fe=stock.fEma[i], se=stock.sEma[i], ml=stock.macd.ml[i], sl=stock.macd.sl[i], prev=phases[i-1];
+                    if(!fe || !se) continue;
+                    if(fe < se) phases[i] = PHASES.DOWNTREND;
                     else {
                         if(prev === PHASES.DOWNTREND) phases[i] = PHASES.NEW_UPTREND;
                         else if(ml < sl) {
-                            const ecoHist = alignedEco ? alignedEco.macd.hist[i] : 0;
-                            if(ecoHist < 0 && stock.macd.hist[i] < stock.macd.hist[i-1]) phases[i] = PHASES.PRE_DOWNTREND;
+                            let trigger = true;
+                            for(let j=0; j<parseInt(settings.preDowntrendHistograms); j++) {
+                                if(stock.macd.h[i-j] >= 0 || stock.macd.h[i-j] >= stock.macd.h[i-j-1]) trigger = false;
+                            }
+                            if(trigger && eco && eco.macd.h[i] < 0) phases[i] = PHASES.PRE_DOWNTREND;
                             else phases[i] = PHASES.LATE_UPTREND;
                         } else phases[i] = PHASES.NEW_UPTREND;
                     }
                 }
 
-                const start = Math.max(0, state.dates.length - 260); // Show last 5 years
-                drawPrice($('priceChart'), state.dates.slice(start), stock, phases.slice(start));
-                drawMacd($('macdChart'), stock.macd, start, "Stock MACD");
-                if (alignedEco) {
-                    drawPrice($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f}, null, "Job Openings");
-                    drawMacd($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
+                updateStatus(phases, allDates, settings);
+                const start = Math.max(0, allDates.length - (settings.timePeriod === 'all' ? allDates.length : parseInt(settings.timePeriod) * 52));
+                
+                drawPriceChart(allDates.slice(start), stock, phases.slice(start), start, settings);
+                drawMACDChart('macdChart', allDates.slice(start), stock.macd, start, "Stock MACD");
+                if(eco) {
+                    drawEcoChart(allDates.slice(start), eco, start, fp, sp);
+                    drawMACDChart('economicMACDChart', allDates.slice(start), eco.macd, start, "Economic MACD");
                 }
-                $('statusTag').textContent = phases[phases.length-1].replace('_',' ');
             }
 
-            function setup(can) {
-                const dpr = window.devicePixelRatio || 1, b = can.getBoundingClientRect();
-                can.width = b.width * dpr; can.height = b.height * dpr;
-                const ctx = can.getContext('2d'); ctx.scale(dpr, dpr);
-                return { ctx, w: b.width, h: b.height };
+            function updateStatus(phases, dates, settings) {
+                const cur = phases[phases.length-1];
+                currentPhaseStatus.textContent = cur.replace('_',' ');
+                currentPhaseStatus.style.color = settings[cur.toLowerCase() + 'Color'];
             }
 
-            function drawPrice(can, dates, data, phases, label="Price") {
-                const {ctx, w, h} = setup(can);
-                const p = data.p.slice(-dates.length), filtered = p.filter(v=>v!=null);
-                const min = Math.min(...filtered), max = Math.max(...filtered);
-                const pad = 30, getX = (i) => pad + (i/(dates.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
+            // --- CANVAS DRAWING (Identical to original) ---
+            function drawPriceChart(dates, stock, phases, start, settings) {
+                const can = document.getElementById('priceChart'), ctx = can.getContext('2d');
+                const b = can.parentElement.getBoundingClientRect();
+                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio);
+                
+                const p = stock.prices.slice(start), f = stock.fEma.slice(start), s = stock.sEma.slice(start), 
+                      s1 = stock.sma1.slice(start), s2 = stock.sma2.slice(start);
+                const all = [...p, ...f.filter(v=>v), ...s.filter(v=>v)];
+                const min = Math.min(...all), max = Math.max(...all);
+                const margin = {t:20, b:30, l:50, r:10}, w = b.width, h = b.height;
+                const getX = (i) => margin.l + (i/(dates.length-1))*(w-margin.l-margin.r);
+                const getY = (v) => h - margin.b - ((v-min)/(max-min))*(h-margin.t-margin.b);
 
-                if(phases) phases.forEach((ph, i) => {
-                    const colors = {DOWNTREND:'#ff386022', NEW_UPTREND:'#23d16022', LATE_UPTREND:'#ffdd5722', PRE_DOWNTREND:'#ff980022'};
-                    ctx.fillStyle = colors[ph];
-                    ctx.fillRect(getX(i), pad, getX(i+1)-getX(i)+1, h-pad*2);
+                phases.forEach((ph, i) => {
+                    ctx.fillStyle = settings[ph.toLowerCase()+'Color'] + '26';
+                    ctx.fillRect(getX(i), margin.t, getX(i+1)-getX(i)+1 || 1, h-margin.t-margin.b);
                 });
 
-                ctx.beginPath(); ctx.strokeStyle = '#3273dc';
-                p.forEach((v, i) => i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v)));
-                ctx.stroke();
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
+                const drawL = (data, col, lw=1) => {
+                    ctx.beginPath(); ctx.strokeStyle = col; ctx.lineWidth = lw;
+                    data.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
+                    ctx.stroke();
+                };
+                drawL(p, '#a0a0a0', 1.5); drawL(f, '#3273dc'); drawL(s, '#23d160'); drawL(s1, '#ff9800'); drawL(s2, '#c56bf0');
             }
 
-            function drawMacd(can, macd, start, label) {
-                const {ctx, w, h} = setup(can);
-                const hst = macd.hist.slice(start), filtered = hst.filter(v=>v!=null);
-                const min = Math.min(...filtered), max = Math.max(...filtered);
-                const pad = 30, getX = (i) => pad + (i/(hst.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
+            function drawMACDChart(id, dates, macd, start, label) {
+                const can = document.getElementById(id), ctx = can.getContext('2d');
+                const b = can.parentElement.getBoundingClientRect();
+                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio);
+                
+                const ml = macd.ml.slice(start), sl = macd.sl.slice(start), hst = macd.h.slice(start);
+                const all = [...ml.filter(v=>v), ...sl.filter(v=>v), ...hst.filter(v=>v)];
+                const min = Math.min(...all), max = Math.max(...all);
+                const margin = {t:20, b:20, l:50, r:10}, w = b.width, h = b.height;
+                const getX = (i) => margin.l + (i/(dates.length-1))*(w-margin.l-margin.r);
+                const getY = (v) => h - margin.b - ((v-min)/(max-min))*(h-margin.t-margin.b);
                 const zero = getY(0);
 
                 hst.forEach((v, i) => {
-                    if (v == null) return;
+                    if(v==null) return;
                     ctx.fillStyle = v >= 0 ? '#23d16088' : '#ff386088';
                     ctx.fillRect(getX(i)-1, getY(v), 2, zero - getY(v));
                 });
-                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
+                const drawL = (data, col) => {
+                    ctx.beginPath(); ctx.strokeStyle = col;
+                    data.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
+                    ctx.stroke();
+                };
+                drawL(ml, '#007bff'); drawL(sl, '#fd7e14');
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 15);
             }
 
-            fetchData();
+            function drawEcoChart(dates, eco, start, fp, sp) {
+                const can = document.getElementById('economicChart'), ctx = can.getContext('2d');
+                const b = can.parentElement.getBoundingClientRect();
+                can.width = b.width * devicePixelRatio; can.height = b.height * devicePixelRatio;
+                ctx.scale(devicePixelRatio, devicePixelRatio);
+                const f = eco.f.slice(start), s = eco.s.slice(start);
+                const all = [...f.filter(v=>v), ...s.filter(v=>v)];
+                const min = Math.min(...all), max = Math.max(...all);
+                const margin = {t:20, b:20, l:50, r:10}, w = b.width, h = b.height;
+                const getX = (i) => margin.l + (i/(dates.length-1))*(w-margin.l-margin.r);
+                const getY = (v) => h - margin.b - ((v-min)/(max-min))*(h-margin.t-margin.b);
+                const drawL = (data, col) => {
+                    ctx.beginPath(); ctx.strokeStyle = col;
+                    data.forEach((v, i) => { if(v) i===0?ctx.moveTo(getX(i), getY(v)):ctx.lineTo(getX(i), getY(v)); });
+                    ctx.stroke();
+                };
+                drawL(f, '#3273dc'); drawL(s, '#23d160');
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(`Job Openings Trend (${fp}/${sp})`, 10, 15);
+            }
+
+            // Settings Logic
+            function buildSettingsPage() {
+                const container = document.getElementById('settingsContainer');
+                container.innerHTML = `
+                    <h2 class="title is-4 has-text-light">Chart Display</h2>
+                    <div class="field settings-field"><label class="label">Time Period</label><div class="select is-fullwidth"><select id="timePeriodSelector">
+                        <option value="all">All Time</option><option value="10">10 Years</option><option value="5">5 Years</option><option value="3">3 Years</option><option value="1">1 Year</option>
+                    </select></div></div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">MA Periods</h2>
+                    <div class="field settings-field"><label class="label">Fast EMA</label><input class="input" type="number" id="fastEmaInput"></div>
+                    <div class="field settings-field"><label class="label">Slow EMA</label><input class="input" type="number" id="slowEmaInput"></div>
+                    <div class="field settings-field"><label class="label">SMA 1</label><input class="input" type="number" id="sma1Input"></div>
+                    <div class="field settings-field"><label class="label">SMA 2</label><input class="input" type="number" id="sma2Input"></div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">Trigger</h2>
+                    <div class="slider-container"><input class="slider is-fullwidth" type="range" id="preDowntrendHistogramsInput" min="1" max="10"><span id="preDowntrendHistogramsValue" class="tag is-info">3</span></div>
+                    <hr style="background-color: var(--dark-border);">
+                    <h2 class="title is-4 has-text-light">Colors</h2>
+                    <div class="field settings-field"><label class="label">New Uptrend</label><input class="input" type="color" id="new_uptrendColorInput"></div>
+                    <div class="field settings-field"><label class="label">Late Uptrend</label><input class="input" type="color" id="late_uptrendColorInput"></div>
+                    <div class="field settings-field"><label class="label">Warning</label><input class="input" type="color" id="pre_downtrendColorInput"></div>
+                    <div class="field settings-field"><label class="label">Downtrend</label><input class="input" type="color" id="downtrendColorInput"></div>
+                `;
+                const inputs = ['timePeriodSelector', 'fastEmaInput', 'slowEmaInput', 'sma1Input', 'sma2Input', 'new_uptrendColorInput', 'late_uptrendColorInput', 'pre_downtrendColorInput', 'downtrendColorInput', 'preDowntrendHistogramsInput'];
+                inputs.forEach(id => document.getElementById(id).onchange = () => { saveSettings(); processAndDraw(); });
+                document.getElementById('preDowntrendHistogramsInput').oninput = (e) => document.getElementById('preDowntrendHistogramsValue').textContent = e.target.value;
+            }
+
+            function getSettings() {
+                const defaults = { timePeriod:'5', fastEma:'10', slowEma:'20', sma1:'50', sma2:'200', preDowntrendHistograms:'3', new_uptrendColor:'#04aa6d', late_uptrendColor:'#ffdd57', pre_downtrendColor:'#ff9800', downtrendColor:'#ff3860' };
+                const saved = localStorage.getItem(SETTINGS_KEY);
+                return saved ? {...defaults, ...JSON.parse(saved)} : defaults;
+            }
+
+            function loadSettings() {
+                const s = getSettings();
+                Object.keys(s).forEach(k => { const el = document.getElementById(k + (k.includes('Color') ? 'Input' : k === 'preDowntrendHistograms' ? 'Input' : k === 'timePeriod' ? 'Selector' : 'Input')); if(el) el.value = s[k]; });
+                document.getElementById('preDowntrendHistogramsValue').textContent = s.preDowntrendHistograms;
+            }
+
+            function saveSettings() {
+                const s = {};
+                ['timePeriod', 'fastEma', 'slowEma', 'sma1', 'sma2', 'preDowntrendHistograms', 'new_uptrendColor', 'late_uptrendColor', 'pre_downtrendColor', 'downtrendColor'].forEach(k => {
+                    const el = document.getElementById(k + (k.includes('Color') ? 'Input' : k === 'preDowntrendHistograms' ? 'Input' : k === 'timePeriod' ? 'Selector' : 'Input'));
+                    s[k] = el.value;
+                });
+                localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+            }
+
         })();
     </script>
 </body>

@@ -4,14 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>CycleScreener PWA</title>
-    
-    <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#1a1d21">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bulma@1.0.4/css/bulma.min.css">
-
     <style>
         :root { --dark-bg: #1a1d21; --dark-card: #272a2e; --border: #444; --text: #f0f0f0; }
         html, body { background-color: var(--dark-bg); color: var(--text); height: 100%; margin: 0; font-family: sans-serif; overflow: hidden; }
@@ -20,11 +13,9 @@
         .input { background-color: var(--dark-bg); border-color: var(--border); color: var(--text); }
         .page { display: flex; flex-direction: column; height: 100vh; width: 100vw; }
         .page-content { flex-grow: 1; overflow-y: auto; padding: 1rem; }
-        .chart-wrapper { background-color: var(--dark-card); border-radius: 8px; height: 280px; position: relative; margin-bottom: 1rem; width: 100%; }
+        .chart-wrapper { background-color: var(--dark-card); border-radius: 8px; height: 260px; position: relative; margin-bottom: 1rem; width: 100%; }
         canvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; }
         #settingsPage { display: none; }
-        .setting-row { margin-bottom: 1rem; max-width: 400px; }
-        .status-text { font-size: 0.9rem; margin-bottom: 0.5rem; }
     </style>
 </head>
 <body>
@@ -33,33 +24,20 @@
         <nav class="navbar">
             <div class="navbar-brand">
                 <div id="statusTag" class="navbar-item has-text-weight-bold">CycleScreener</div>
-                <a role="button" class="navbar-burger" data-target="navMenu"><span></span><span></span><span></span></a>
-            </div>
-            <div id="navMenu" class="navbar-menu">
-                <div class="navbar-start">
-                    <div class="navbar-item">
-                        <div class="field is-grouped">
-                            <p class="control"><input class="input is-small" type="text" id="tickerInput" value="VT"></p>
-                            <p class="control"><button id="btnFetch" class="button is-info is-small">Fetch</button></p>
-                        </div>
-                    </div>
-                    <a class="navbar-item" id="navSettings">Settings</a>
+                <div class="navbar-item">
+                    <input class="input is-small" type="text" id="tickerInput" value="VT" style="width: 80px;">
+                    <button id="btnFetch" class="button is-info is-small ml-2">Fetch</button>
                 </div>
             </div>
         </nav>
 
         <main class="page-content">
-            <div id="msg" class="has-text-centered status-text has-text-grey">Ready</div>
+            <div id="msg" class="has-text-centered is-size-7 has-text-grey mb-2">Ready</div>
             <div class="chart-wrapper"><canvas id="priceChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="macdChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="ecoChart"></canvas></div>
             <div class="chart-wrapper"><canvas id="ecoMacdChart"></canvas></div>
         </main>
-    </div>
-
-    <div id="settingsPage" class="page">
-        <nav class="navbar"><div class="navbar-brand"><a class="navbar-item" id="btnBack"> < Back </a></div></nav>
-        <main class="page-content" id="settingsBody"></main>
     </div>
 
     <script>
@@ -68,64 +46,61 @@
             let state = { dates: [], prices: [], eco: null };
 
             const $ = (id) => document.getElementById(id);
-
-            // UI Actions
             $('btnFetch').onclick = fetchData;
-            $('navSettings').onclick = () => { $('mainPage').style.display='none'; $('settingsPage').style.display='flex'; buildSettings(); };
-            $('btnBack').onclick = () => { $('settingsPage').style.display='none'; $('mainPage').style.display='flex'; };
 
             async function fetchData() {
                 const ticker = $('tickerInput').value.trim().toUpperCase();
-                $('msg').textContent = "Fetching Yahoo Finance Data...";
+                $('msg').textContent = "Contacting server...";
+                $('msg').className = "has-text-centered is-size-7 has-text-grey mb-2";
+
                 try {
                     const [pRes, eRes] = await Promise.all([
                         fetch(`/api/price/${ticker}`),
                         fetch(`/api/economic`)
                     ]);
 
-                    if (!pRes.ok) throw new Error("Stock ticker not found.");
+                    if (!pRes.ok) {
+                        const errData = await pRes.json();
+                        throw new Error(errData.error || "Stock data failed");
+                    }
+                    if (!eRes.ok) throw new Error("Economic data failed");
                     
                     const pJson = await pRes.json();
                     const eCsv = await eRes.text();
 
-                    parseYahooData(pJson);
-                    state.eco = parseEcoData(eCsv);
+                    parseYahooPrices(pJson);
+                    state.eco = parseEco(eCsv);
                     
-                    $('msg').textContent = `Displaying ${ticker}`;
+                    $('msg').textContent = `Success: Loaded ${ticker}`;
                     render();
                 } catch (e) { 
                     $('msg').textContent = `Error: ${e.message}`; 
+                    $('msg').className = "has-text-centered is-size-7 has-text-danger mb-2";
                 }
             }
 
-            function parseYahooData(json) {
+            function parseYahooPrices(json) {
                 const result = json.chart.result[0];
-                const timestamps = result.timestamp;
-                const closePrices = result.indicators.quote[0].close;
-
-                state.dates = [];
-                state.prices = [];
-
+                const timestamps = result.timestamp || [];
+                const quotes = result.indicators.quote[0].close || [];
+                state.dates = []; state.prices = [];
                 timestamps.forEach((ts, i) => {
-                    const price = closePrices[i];
-                    if (price !== null && price !== undefined) {
-                        const date = new Date(ts * 1000).toISOString().split('T')[0];
-                        state.dates.push(date);
-                        state.prices.push(price);
+                    if (quotes[i] != null) {
+                        state.dates.push(new Date(ts * 1000).toISOString().split('T')[0]);
+                        state.prices.push(quotes[i]);
                     }
                 });
             }
 
-            function parseEcoData(csv) {
+            function parseEco(csv) {
                 const lines = csv.trim().split('\n');
-                lines.shift(); // Remove header
+                lines.shift();
                 return lines.map(l => {
                     const [d, v] = l.split(',');
                     return { d, v: parseFloat(v) };
                 }).filter(o => !isNaN(o.v));
             }
 
-            // Calculations
             const ema = (data, p) => {
                 const k = 2/(p+1), res = new Array(data.length).fill(null);
                 if (data.length < p) return res;
@@ -144,13 +119,11 @@
                 return { ml, sl: fullSl, hist };
             };
 
-            // Rendering Logic
             function render() {
-                const settings = getSet();
                 const stock = {
                     p: state.prices,
-                    f: ema(state.prices, parseInt(settings.fast)),
-                    s: ema(state.prices, parseInt(settings.slow)),
+                    f: ema(state.prices, 10),
+                    s: ema(state.prices, 20),
                     macd: getMACD(state.prices)
                 };
 
@@ -163,113 +136,72 @@
                     alignedEco = { v: vals, f: ema(vals, 10), macd: getMACD(vals) };
                 }
 
-                // Cycle Phase Algorithm
                 const phases = new Array(stock.p.length).fill(PHASES.DOWNTREND);
                 for(let i=1; i<stock.p.length; i++){
                     const f=stock.f[i], s=stock.s[i], ml=stock.macd.ml[i], sl=stock.macd.sl[i], prev=phases[i-1];
                     if(!f || !s) continue;
-                    
-                    if(f < s) {
-                        phases[i] = PHASES.DOWNTREND;
-                    } else {
+                    if(f < s) phases[i] = PHASES.DOWNTREND;
+                    else {
                         if(prev === PHASES.DOWNTREND) phases[i] = PHASES.NEW_UPTREND;
                         else if(ml < sl) {
                             const ecoHist = alignedEco ? alignedEco.macd.hist[i] : 0;
-                            // Pre-Downtrend trigger: falling Stock Hist + Negative Eco Hist
                             if(ecoHist < 0 && stock.macd.hist[i] < stock.macd.hist[i-1]) phases[i] = PHASES.PRE_DOWNTREND;
                             else phases[i] = PHASES.LATE_UPTREND;
                         } else phases[i] = PHASES.NEW_UPTREND;
                     }
                 }
 
-                const start = Math.max(0, state.dates.length - (parseInt(settings.years)*52));
-                drawPriceChart($('priceChart'), state.dates.slice(start), stock, phases.slice(start), settings);
-                drawMacdChart($('macdChart'), stock.macd, start, "Stock MACD");
-                
+                const start = Math.max(0, state.dates.length - 260); // Show last 5 years
+                drawPrice($('priceChart'), state.dates.slice(start), stock, phases.slice(start));
+                drawMacd($('macdChart'), stock.macd, start, "Stock MACD");
                 if (alignedEco) {
-                    drawPriceChart($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f}, null, settings, "Job Openings");
-                    drawMacdChart($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
+                    drawPrice($('ecoChart'), state.dates.slice(start), {p:alignedEco.v, f:alignedEco.f}, null, "Job Openings");
+                    drawMacd($('ecoMacdChart'), alignedEco.macd, start, "Economic MACD");
                 }
-
-                const lastPhase = phases[phases.length-1];
-                $('statusTag').textContent = lastPhase.replace('_',' ');
-                $('statusTag').style.color = settings['c' + lastPhase];
+                $('statusTag').textContent = phases[phases.length-1].replace('_',' ');
             }
 
-            function setupCanvas(can) {
+            function setup(can) {
                 const dpr = window.devicePixelRatio || 1, b = can.getBoundingClientRect();
                 can.width = b.width * dpr; can.height = b.height * dpr;
                 const ctx = can.getContext('2d'); ctx.scale(dpr, dpr);
                 return { ctx, w: b.width, h: b.height };
             }
 
-            function drawPriceChart(can, dates, data, phases, set, label="Price") {
-                const {ctx, w, h} = setupCanvas(can);
-                const p = data.p.slice(-dates.length), filtered = p.filter(v=>v!==null);
+            function drawPrice(can, dates, data, phases, label="Price") {
+                const {ctx, w, h} = setup(can);
+                const p = data.p.slice(-dates.length), filtered = p.filter(v=>v!=null);
                 const min = Math.min(...filtered), max = Math.max(...filtered);
                 const pad = 30, getX = (i) => pad + (i/(dates.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
 
                 if(phases) phases.forEach((ph, i) => {
-                    ctx.fillStyle = set['c'+ph] + '22';
+                    const colors = {DOWNTREND:'#ff386022', NEW_UPTREND:'#23d16022', LATE_UPTREND:'#ffdd5722', PRE_DOWNTREND:'#ff980022'};
+                    ctx.fillStyle = colors[ph];
                     ctx.fillRect(getX(i), pad, getX(i+1)-getX(i)+1, h-pad*2);
                 });
 
-                ctx.beginPath(); ctx.strokeStyle = '#3273dc'; ctx.lineWidth = 1.5;
-                p.forEach((v, i) => {
-                    if (v === null) return;
-                    i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v));
-                });
+                ctx.beginPath(); ctx.strokeStyle = '#3273dc';
+                p.forEach((v, i) => i === 0 ? ctx.moveTo(getX(i), getY(v)) : ctx.lineTo(getX(i), getY(v)));
                 ctx.stroke();
-                ctx.fillStyle = '#a0a0a0'; ctx.font = "12px sans-serif"; ctx.fillText(label, 10, 20);
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
             }
 
-            function drawMacdChart(can, macd, start, label) {
-                const {ctx, w, h} = setupCanvas(can);
-                const hst = macd.hist.slice(start), filtered = hst.filter(v=>v!==null);
-                if (filtered.length === 0) return;
+            function drawMacd(can, macd, start, label) {
+                const {ctx, w, h} = setup(can);
+                const hst = macd.hist.slice(start), filtered = hst.filter(v=>v!=null);
                 const min = Math.min(...filtered), max = Math.max(...filtered);
                 const pad = 30, getX = (i) => pad + (i/(hst.length-1))*(w-pad*2), getY = (v) => h-pad - ((v-min)/(max-min))*(h-pad*2);
                 const zero = getY(0);
 
                 hst.forEach((v, i) => {
-                    if (v === null) return;
+                    if (v == null) return;
                     ctx.fillStyle = v >= 0 ? '#23d16088' : '#ff386088';
                     ctx.fillRect(getX(i)-1, getY(v), 2, zero - getY(v));
                 });
-                ctx.fillStyle = '#a0a0a0'; ctx.font = "12px sans-serif"; ctx.fillText(label, 10, 20);
+                ctx.fillStyle = '#a0a0a0'; ctx.fillText(label, 10, 20);
             }
 
-            function getSet() {
-                const d = { years:'5', fast:'10', slow:'20', cDOWNTREND:'#ff3860', cNEW_UPTREND:'#23d160', cLATE_UPTREND:'#ffdd57', cPRE_DOWNTREND:'#ff9800' };
-                const s = localStorage.getItem('cycle_sets');
-                return s ? {...d, ...JSON.parse(s)} : d;
-            }
-
-            function buildSettings() {
-                const s = getSet();
-                const fields = [
-                    {k:'years', l:'Timeline (Years)', t:'number'},
-                    {k:'fast', l:'Fast EMA Period', t:'number'},
-                    {k:'slow', l:'Slow EMA Period', t:'number'},
-                    {k:'cDOWNTREND', l:'Downtrend Color', t:'color'},
-                    {k:'cNEW_UPTREND', l:'New Uptrend Color', t:'color'},
-                    {k:'cLATE_UPTREND', l:'Late Uptrend Color', t:'color'},
-                    {k:'cPRE_DOWNTREND', l:'Warning Color', t:'color'}
-                ];
-                $('settingsBody').innerHTML = fields.map(f => `
-                    <div class="setting-row">
-                        <label class="label is-small has-text-grey-light">${f.l}</label>
-                        <input class="input is-small set-in" type="${f.t}" data-k="${f.k}" value="${s[f.k]}">
-                    </div>
-                `).join('');
-                document.querySelectorAll('.set-in').forEach(el => el.onchange = (e) => {
-                    const cur = getSet(); cur[e.target.dataset.k] = e.target.value;
-                    localStorage.setItem('cycle_sets', JSON.stringify(cur));
-                    render();
-                });
-            }
-
-            fetchData(); // Initial load
+            fetchData();
         })();
     </script>
 </body>

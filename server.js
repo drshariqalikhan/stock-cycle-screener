@@ -31,7 +31,7 @@ app.get('/api/price/:ticker', async (req, res) => {
 // FRED PROXY
 app.get('/api/economic', async (req, res) => {
     try {
-        const url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=JTS1000OSL&cosd=2000-12-01&coed=2025-05-01&fq=Monthly&transformation=lin`;
+        const url = `https://fred.stlouisfed.org/graph/fredgraph.csv?id=JTS1000OSL&cosd=2000-12-01&coed=2026-05-01&fq=Monthly&transformation=lin`;
         const response = await axios.get(url, { timeout: 8000 });
         res.setHeader('Content-Type', 'text/plain');
         res.send(response.data);
